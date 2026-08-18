@@ -1,0 +1,89 @@
+name: youtube-rescue-pr
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      VIDEO_URL: https://youtu.be/BUN1qw0yH6M
+    steps:
+      - name: Install tools
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg xvfb curl
+          curl -fsSL https://deno.land/install.sh | sh
+          echo "$HOME/.deno/bin" >> "$GITHUB_PATH"
+          python3 -m pip install -U pip
+          python3 -m pip install -U "yt-dlp[default]" yt-dlp-getpot-wpc bgutil-ytdlp-pot-provider curl_cffi
+
+      - name: Start PO token provider
+        run: |
+          set -euxo pipefail
+          docker run -d --name bgutil -p 4416:4416 --init brainicism/bgutil-ytdlp-pot-provider:latest
+          for i in $(seq 1 40); do
+            curl -fsS http://127.0.0.1:4416/ping && exit 0
+            sleep 1
+          done
+          docker logs bgutil
+          exit 1
+
+      - name: Download
+        shell: bash
+        run: |
+          set -u
+          mkdir -p out
+          success=0
+          common=(--js-runtimes deno --remote-components ejs:github --retries 10 --fragment-retries 10 --retry-sleep 2 --newline --no-playlist -o 'out/video.%(ext)s')
+
+          echo 'TRY 1: web_safari HLS'
+          yt-dlp "${common[@]}" --extractor-args 'youtube:player_client=web_safari' -f 'best[height<=720]/best' "$VIDEO_URL" && success=1 || true
+
+          if [ "$success" -ne 1 ]; then
+            rm -f out/*
+            echo 'TRY 2: mweb + bgutil PO token'
+            yt-dlp "${common[@]}" --extractor-args 'youtube:player_client=mweb' --extractor-args 'youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416' --merge-output-format mp4 -f 'bv*[ext=mp4][height<=720]+ba[ext=m4a]/b[ext=mp4][height<=720]/b[height<=720]' "$VIDEO_URL" && success=1 || true
+          fi
+
+          if [ "$success" -ne 1 ]; then
+            rm -f out/*
+            echo 'TRY 3: mweb + browser PO token'
+            CHROME="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+            echo "Chrome: $CHROME"
+            if [ -n "$CHROME" ]; then
+              xvfb-run -a yt-dlp "${common[@]}" --extractor-args 'youtube:player_client=mweb' --extractor-args "youtubepot-wpc:browser_path=$CHROME" --merge-output-format mp4 -f 'bv*[ext=mp4][height<=720]+ba[ext=m4a]/b[ext=mp4][height<=720]/b[height<=720]' "$VIDEO_URL" && success=1 || true
+            fi
+          fi
+
+          if [ "$success" -ne 1 ]; then
+            rm -f out/*
+            echo 'TRY 4: web_embedded low-bandwidth fallback'
+            yt-dlp "${common[@]}" --extractor-args 'youtube:player_client=web_embedded' -f '18/b[height<=360]/best' "$VIDEO_URL" && success=1 || true
+          fi
+
+          if [ "$success" -ne 1 ]; then
+            docker logs bgutil || true
+            exit 1
+          fi
+
+          FILE="$(find out -maxdepth 1 -type f | head -n 1)"
+          test -s "$FILE"
+          ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_name,codec_type,width,height -of default=noprint_wrappers=1 "$FILE"
+          sha256sum "$FILE" | tee out/SHA256.txt
+          ls -lh out
+
+      - name: Upload video
+        uses: actions/upload-artifact@v4
+        with:
+          name: BUN1qw0yH6M-video
+          path: out/
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
