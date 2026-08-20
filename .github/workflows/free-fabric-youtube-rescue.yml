@@ -26,19 +26,18 @@ jobs:
         run: |
           npm init -y >/dev/null 2>&1
           npm install playwright-core@latest
-          which google-chrome || which chromium || which chromium-browser
-          google-chrome --version || chromium --version || true
+          which google-chrome
+          google-chrome --version
 
       - name: Drive public hosted Button API
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p out
-          cat > /tmp/button.mjs <<'NODE'
+          cat > button.mjs <<'NODE'
           import { chromium } from 'playwright-core';
           import fs from 'node:fs';
-          const exe = ['/usr/bin/google-chrome','/usr/bin/chromium','/usr/bin/chromium-browser'].find(fs.existsSync);
-          if (!exe) throw new Error('No system Chromium/Chrome');
+          const exe='/usr/bin/google-chrome';
           const browser = await chromium.launch({executablePath: exe, headless:true, args:['--no-sandbox']});
           const context = await browser.newContext({acceptDownloads:true});
           const page = await context.newPage();
@@ -54,47 +53,40 @@ jobs:
           log.push('http '+(resp?.status() ?? 'none')+' final='+page.url());
           await page.screenshot({path:'out/button-initial.png',fullPage:true});
           fs.writeFileSync('out/button-initial.html',await page.content());
+          const initialBody=await page.locator('body').innerText().catch(()=> '');
+          log.push('body='+initialBody.slice(0,3000).replace(/\n/g,' | '));
 
-          const texts=await page.locator('body').innerText().catch(()=> '');
-          log.push('body='+texts.slice(0,3000).replace(/\n/g,' | '));
-          const candidates=['#downloadButton','button','a'];
           let clicked=false;
           let downloadObj=null;
-
-          for (const sel of candidates) {
-            const loc=page.locator(sel);
-            const n=await loc.count().catch(()=>0);
-            for(let i=0;i<n;i++){
-              const el=loc.nth(i);
-              if(!(await el.isVisible().catch(()=>false))) continue;
-              const txt=(await el.innerText().catch(()=>''))+' '+(await el.getAttribute('href').catch(()=>''));
-              log.push('candidate '+sel+' '+i+' '+txt.slice(0,500));
-            }
-          }
-
+          let direct='';
           for(let round=0;round<120 && !downloadObj;round++){
+            const links=await page.locator('a').evaluateAll(as=>as.map(a=>({text:(a.textContent||'').trim(),href:a.href||'',id:a.id||''}))).catch(()=>[]);
+            if(round===0) for(const a of links) log.push('link '+JSON.stringify(a));
+
+            const body=await page.locator('body').innerText().catch(()=> '');
+            if(/captcha|turnstile|verify you are human|checking your browser/i.test(body)){
+              log.push('HUMAN_CHALLENGE_DETECTED '+body.slice(0,1200).replace(/\n/g,' | '));
+              break;
+            }
+
             const btn=page.locator('#downloadButton');
             if(!clicked && await btn.count() && await btn.isVisible().catch(()=>false)){
-              log.push('click #downloadButton round='+round);
-              const dp=page.waitForEvent('download',{timeout:5000}).catch(()=>null);
+              log.push('click #downloadButton round='+round+' text='+(await btn.innerText().catch(()=>'')));
+              const dp=page.waitForEvent('download',{timeout:8000}).catch(()=>null);
               await btn.click({timeout:5000}).catch(e=>log.push('clickerr '+e.message));
               downloadObj=await dp;
               clicked=true;
+              if(downloadObj) break;
             }
-            if(downloadObj) break;
 
-            const links=await page.locator('a').evaluateAll(as=>as.map(a=>({text:(a.textContent||'').trim(),href:a.href||'',download:a.getAttribute('download')}))).catch(()=>[]);
-            for(const a of links){
-              if(a.href && a.href !== '#' && (/download|ocean|save|\.mp4|googlevideo|cdn/i.test(a.href) || /download/i.test(a.text))){
+            const allLinks=await page.locator('a').evaluateAll(as=>as.map(a=>({text:(a.textContent||'').trim(),href:a.href||''}))).catch(()=>[]);
+            for(const a of allLinks){
+              if(a.href && /^https?:/.test(a.href) && !/\/api\/button/.test(a.href) && (/download|ocean|save|\.mp4|googlevideo|cdn|pacific/i.test(a.href) || /download/i.test(a.text))){
                 log.push('interesting-link '+JSON.stringify(a));
-                if(/^https?:/.test(a.href) && !/\/api\/button/.test(a.href)) fs.writeFileSync('out/direct_url.txt',a.href+'\n');
+                if(!/\/ajax\/ad\//.test(a.href)) direct=a.href;
               }
             }
-            const body=(await page.locator('body').innerText().catch(()=>''));
-            if(/captcha|turnstile|verify you are human|cloudflare/i.test(body)){
-              log.push('HUMAN_CHALLENGE_DETECTED '+body.slice(0,1000).replace(/\n/g,' | '));
-              break;
-            }
+            if(direct){ fs.writeFileSync('out/direct_url.txt',direct+'\n'); break; }
             await page.waitForTimeout(1500);
           }
 
@@ -107,11 +99,11 @@ jobs:
           fs.writeFileSync('out/browser.log',log.join('\n')+'\n');
           await browser.close();
           NODE
-          node /tmp/button.mjs
+          node ./button.mjs
 
           if [[ ! -s out/BUN1qw0yH6M.mp4 && -s out/direct_url.txt ]]; then
             URL=$(tail -n1 out/direct_url.txt)
-            curl -fL --retry 2 --retry-delay 1 --connect-timeout 10 --max-time 900 -A 'Mozilla/5.0' "$URL" -o out/BUN1qw0yH6M.mp4
+            curl -fL --retry 2 --retry-delay 1 --connect-timeout 10 --max-time 900 -A 'Mozilla/5.0' -H 'Referer: https://p.savenow.to/' "$URL" -o out/BUN1qw0yH6M.mp4
           fi
           test -s out/BUN1qw0yH6M.mp4
 
@@ -136,6 +128,6 @@ jobs:
         with:
           name: youtube-BUN1qw0yH6M
           path: out/
-          if-no-files-found: error
+          if-no-files-found: warn
           compression-level: 0
           retention-days: 1
