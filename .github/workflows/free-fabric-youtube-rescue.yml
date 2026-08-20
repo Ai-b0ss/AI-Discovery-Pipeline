@@ -16,64 +16,45 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve and download via Piped APIs
+      - name: Resolve and download via trusted Invidious APIs
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p out
-          APIS=(
-            'https://pipedapi.kavin.rocks'
-            'https://pipedapi.tokhmi.xyz'
-            'https://pipedapi.moomoo.me'
-            'https://pipedapi.syncpundit.io'
-            'https://api-piped.mha.fi'
-            'https://piped-api.garudalinux.org'
+          INSTANCES=(
+            'https://inv.nadeko.net'
+            'https://invidious.nerdvpn.de'
+            'https://yt.chocolatemoo53.com'
+            'https://invidious.tiekoetter.com'
+            'https://invidious.f5.si'
           )
-          : > out/piped_attempts.txt
+          : > out/invidious_attempts.txt
           SUCCESS=0
 
-          for API in "${APIS[@]}"; do
-            echo "trying $API" | tee -a out/piped_attempts.txt
-            META=/tmp/piped.json
+          for IV in "${INSTANCES[@]}"; do
+            echo "trying $IV" | tee -a out/invidious_attempts.txt
+            META=/tmp/invidious.json
             rm -f "$META"
-            CODE=$(curl -sS -L --connect-timeout 8 --max-time 35 -o "$META" -w '%{http_code}' \
-              "$API/streams/BUN1qw0yH6M" || true)
-            VS=$(jq -r '.videoStreams | length // 0' "$META" 2>/dev/null || echo 0)
-            AS=$(jq -r '.audioStreams | length // 0' "$META" 2>/dev/null || echo 0)
+            CODE=$(curl -sS -L --connect-timeout 8 --max-time 40 -o "$META" -w '%{http_code}' \
+              "$IV/api/v1/videos/BUN1qw0yH6M?local=true" || true)
             TITLE=$(jq -r '.title // empty' "$META" 2>/dev/null || true)
-            echo "http=$CODE videoStreams=$VS audioStreams=$AS title=$TITLE" | tee -a out/piped_attempts.txt
-            [[ "$VS" =~ ^[0-9]+$ ]] || VS=0
-            [[ "$AS" =~ ^[0-9]+$ ]] || AS=0
-            if (( VS < 1 )); then continue; fi
+            FS=$(jq -r '.formatStreams | length // 0' "$META" 2>/dev/null || echo 0)
+            AD=$(jq -r '.adaptiveFormats | length // 0' "$META" 2>/dev/null || echo 0)
+            echo "http=$CODE formatStreams=$FS adaptive=$AD title=$TITLE" | tee -a out/invidious_attempts.txt
+            [[ "$FS" =~ ^[0-9]+$ ]] || FS=0
 
-            VIDEO_URL=$(jq -r '[.videoStreams[] | select(.url != null and (.height // 0) <= 1080)] | sort_by(.height // 0, .bitrate // 0) | reverse | .[0].url // empty' "$META")
-            VIDEO_ONLY=$(jq -r '[.videoStreams[] | select(.url != null and (.height // 0) <= 1080)] | sort_by(.height // 0, .bitrate // 0) | reverse | .[0].videoOnly // true' "$META")
-            AUDIO_URL=$(jq -r '[.audioStreams[] | select(.url != null)] | sort_by(.bitrate // 0) | reverse | .[0].url // empty' "$META")
-            HEIGHT=$(jq -r '[.videoStreams[] | select(.url != null and (.height // 0) <= 1080)] | sort_by(.height // 0, .bitrate // 0) | reverse | .[0].height // 0' "$META")
-            echo "selected_height=$HEIGHT videoOnly=$VIDEO_ONLY" | tee -a out/piped_attempts.txt
-            test -n "$VIDEO_URL" || continue
-
-            rm -f /tmp/video.part /tmp/audio.part out/BUN1qw0yH6M.mp4
-            if ! curl -fL --retry 2 --retry-delay 1 --connect-timeout 10 --max-time 600 \
-                 -A 'Mozilla/5.0' "$VIDEO_URL" -o /tmp/video.part; then
-              continue
-            fi
-
-            if [[ "$VIDEO_ONLY" == "false" ]]; then
-              cp /tmp/video.part out/BUN1qw0yH6M.mp4
-            else
-              test -n "$AUDIO_URL" || continue
-              if ! curl -fL --retry 2 --retry-delay 1 --connect-timeout 10 --max-time 600 \
-                   -A 'Mozilla/5.0' "$AUDIO_URL" -o /tmp/audio.part; then
-                continue
+            if (( FS > 0 )); then
+              URL=$(jq -r '[.formatStreams[] | select(.url != null)] | sort_by((.height // 0), (.bitrate // 0)) | reverse | .[0].url // empty' "$META")
+              QUALITY=$(jq -r '[.formatStreams[] | select(.url != null)] | sort_by((.height // 0), (.bitrate // 0)) | reverse | .[0].qualityLabel // .[0].quality // empty' "$META")
+              echo "muxed_quality=$QUALITY" | tee -a out/invidious_attempts.txt
+              if [[ -n "$URL" ]] && curl -fL --retry 2 --retry-delay 1 --connect-timeout 10 --max-time 600 \
+                    -A 'Mozilla/5.0' "$URL" -o out/BUN1qw0yH6M.mp4; then
+                cp "$META" out/invidious_metadata.json
+                echo "selected_instance=$IV" | tee -a out/invidious_attempts.txt
+                SUCCESS=1
+                break
               fi
-              ffmpeg -y -v warning -i /tmp/video.part -i /tmp/audio.part -map 0:v:0 -map 1:a:0 -c copy -movflags +faststart out/BUN1qw0yH6M.mp4
             fi
-
-            cp "$META" out/piped_metadata.json
-            echo "selected_api=$API" | tee -a out/piped_attempts.txt
-            SUCCESS=1
-            break
           done
           test "$SUCCESS" -eq 1
 
