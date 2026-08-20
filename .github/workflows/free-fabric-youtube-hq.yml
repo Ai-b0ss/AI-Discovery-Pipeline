@@ -1,0 +1,55 @@
+name: FREE FABRIC YouTube HQ Rescue
+
+on:
+  pull_request:
+    paths:
+      - '.free-fabric/youtube-rescue/**'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Probe 1440p availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+          VIDEO='https://www.youtube.com/watch?v=BUN1qw0yH6M'
+          BASE='https://p.savenow.to'
+          mkdir -p out
+          curl -fsSL --connect-timeout 10 --max-time 45 -o out/init.json \
+            -A "$UA" -H 'Accept: application/json,*/*' -H "Referer: $BASE/api/button/" \
+            --get "$BASE/api/v2/download" \
+            --data-urlencode 'button=1' \
+            --data-urlencode 'format=1440' \
+            --data-urlencode 'iframe_source=direct-iframe' \
+            --data-urlencode "url=$VIDEO"
+          ID=$(jq -r '.id // empty' out/init.json)
+          PURL=$(jq -r '.progress_url // empty' out/init.json)
+          TITLE=$(jq -r '.title // empty' out/init.json)
+          echo "title=$TITLE id=$ID"
+          test -n "$ID"
+          DOWNLOAD=''
+          for N in $(seq 1 120); do
+            if [[ "$N" == "1" && -n "$PURL" ]]; then POLL="$PURL"; else POLL="$BASE/api/progress?id=$ID"; fi
+            curl -fsSL --connect-timeout 10 --max-time 30 -o out/progress.json \
+              -A "$UA" -H 'Accept: application/json,*/*' -H "Referer: $BASE/" "$POLL" || true
+            OK=$(jq -r '.success // 0' out/progress.json 2>/dev/null || echo 0)
+            PROGRESS=$(jq -r '.progress // empty' out/progress.json 2>/dev/null || true)
+            DOWNLOAD=$(jq -r '.download_url // empty' out/progress.json 2>/dev/null || true)
+            TEXT=$(jq -r '.text // empty' out/progress.json 2>/dev/null || true)
+            if (( N == 1 || N % 10 == 0 )); then echo "poll=$N success=$OK progress=$PROGRESS ready=$([[ -n "$DOWNLOAD" ]] && echo 1 || echo 0) text=$TEXT"; fi
+            if [[ "$OK" == "1" && -n "$DOWNLOAD" ]]; then break; fi
+            sleep 1.5
+          done
+          if [[ -n "$DOWNLOAD" ]]; then
+            echo 'HQ_1440_RESOLVED=1'
+          else
+            echo 'HQ_1440_RESOLVED=0'
+            exit 2
+          fi
