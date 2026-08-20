@@ -11,101 +11,72 @@ permissions:
 jobs:
   rescue:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve through exact hosted Button API v2 flow
+      - name: Probe exact 1080p and 720p sizes without full download
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p out
           UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
           VIDEO='https://www.youtube.com/watch?v=BUN1qw0yH6M'
-          BASES=('https://p.savenow.to' 'https://p.oceansaver.in')
-          : > out/button_v2_attempts.txt
-          SUCCESS=0
+          BASE='https://p.savenow.to'
+          : > out/size_probe.txt
 
-          for BASE in "${BASES[@]}"; do
-            for FORMAT in 1080 720; do
-              TAG=$(echo "$BASE-$FORMAT" | sed 's#https://##;s#[./:]#-#g')
-              echo "base=$BASE format=$FORMAT" | tee -a out/button_v2_attempts.txt
-              INIT=/tmp/init.json
-              CODE=$(curl -sS -L --connect-timeout 10 --max-time 45 -o "$INIT" -w '%{http_code}' \
-                -A "$UA" -H 'Accept: application/json,*/*' \
-                -H "Referer: $BASE/api/button/" \
-                --get "$BASE/api/v2/download" \
-                --data-urlencode 'button=1' \
-                --data-urlencode "format=$FORMAT" \
-                --data-urlencode 'iframe_source=direct-iframe' \
-                --data-urlencode "url=$VIDEO" || true)
-              cp "$INIT" "out/$TAG-init.json" 2>/dev/null || true
-              ID=$(jq -r '.id // empty' "$INIT" 2>/dev/null || true)
-              PURL=$(jq -r '.progress_url // empty' "$INIT" 2>/dev/null || true)
-              ERR=$(jq -r '.text // .message // .error // empty' "$INIT" 2>/dev/null || true)
-              echo "init_http=$CODE id=$ID progress_url=$PURL err=$ERR" | tee -a out/button_v2_attempts.txt
-              [[ -n "$ID" ]] || continue
+          for FORMAT in 1080 720; do
+            echo "format=$FORMAT" | tee -a out/size_probe.txt
+            INIT="out/init-$FORMAT.json"
+            CODE=$(curl -sS -L --connect-timeout 10 --max-time 45 -o "$INIT" -w '%{http_code}' \
+              -A "$UA" -H 'Accept: application/json,*/*' -H "$BASE/api/button/:" \
+              --get "$BASE/api/v2/download" \
+              --data-urlencode 'button=1' \
+              --data-urlencode "format=$FORMAT" \
+              --data-urlencode 'iframe_source=direct-iframe' \
+              --data-urlencode "url=$VIDEO" || true)
+            ID=$(jq -r '.id // empty' "$INIT")
+            PURL=$(jq -r '.progress_url // empty' "$INIT")
+            TITLE=$(jq -r '.title // empty' "$INIT")
+            echo "init_http=$CODE id=$ID title=$TITLE" | tee -a out/size_probe.txt
+            test -n "$ID"
 
-              DOWNLOAD=''
-              for N in $(seq 1 120); do
-                # Live button JS uses provided progress_url once, then BASE/api/progress?id=ID.
-                if [[ "$N" == "1" && -n "$PURL" ]]; then
-                  POLL="$PURL"
-                else
-                  POLL="$BASE/api/progress?id=$ID"
-                fi
-                PROG=/tmp/progress.json
-                PCODE=$(curl -sS -L --connect-timeout 10 --max-time 30 -o "$PROG" -w '%{http_code}' \
-                  -A "$UA" -H 'Accept: application/json,*/*' -H "Referer: $BASE/" "$POLL" || true)
-                OK=$(jq -r '.success // 0' "$PROG" 2>/dev/null || echo 0)
-                PROGRESS=$(jq -r '.progress // empty' "$PROG" 2>/dev/null || true)
-                DOWNLOAD=$(jq -r '.download_url // empty' "$PROG" 2>/dev/null || true)
-                TEXT=$(jq -r '.text // .message // empty' "$PROG" 2>/dev/null || true)
-                if (( N == 1 || N % 5 == 0 )); then
-                  echo "poll=$N http=$PCODE success=$OK progress=$PROGRESS ready=$([[ -n "$DOWNLOAD" ]] && echo 1 || echo 0) text=$TEXT" | tee -a out/button_v2_attempts.txt
-                fi
-                if [[ "$OK" == "1" && -n "$DOWNLOAD" ]]; then break; fi
-                if [[ -n "$TEXT" ]]; then echo "terminal_text=$TEXT" | tee -a out/button_v2_attempts.txt; break; fi
-                sleep 1.5
-              done
-              cp /tmp/progress.json "out/$TAG-progress.json" 2>/dev/null || true
-              [[ -n "$DOWNLOAD" ]] || continue
-
-              printf '%s\n' "$DOWNLOAD" > out/direct_url.txt
-              echo "download_ready base=$BASE format=$FORMAT" | tee -a out/button_v2_attempts.txt
-              rm -f out/BUN1qw0yH6M.mp4
-              if curl -fL --retry 2 --retry-delay 1 --connect-timeout 10 --max-time 900 \
-                    -A "$UA" -H "Referer: $BASE/" "$DOWNLOAD" -o out/BUN1qw0yH6M.mp4; then
-                SUCCESS=1
-                break 2
-              fi
+            DOWNLOAD=''
+            for N in $(seq 1 120); do
+              if [[ "$N" == "1" && -n "$PURL" ]]; then POLL="$PURL"; else POLL="$BASE/api/progress?id=$ID"; fi
+              PROG="out/progress-$FORMAT.json"
+              PCODE=$(curl -sS -L --connect-timeout 10 --max-time 30 -o "$PROG" -w '%{http_code}' \
+                -A "$UA" -H 'Accept: application/json,*/*' -H "Referer: $BASE/" "$POLL" || true)
+              OK=$(jq -r '.success // 0' "$PROG" 2>/dev/null || echo 0)
+              PROGRESS=$(jq -r '.progress // empty' "$PROG" 2>/dev/null || true)
+              DOWNLOAD=$(jq -r '.download_url // empty' "$PROG" 2>/dev/null || true)
+              TEXT=$(jq -r '.text // empty' "$PROG" 2>/dev/null || true)
+              if (( N == 1 || N % 10 == 0 )); then echo "poll=$N http=$PCODE success=$OK progress=$PROGRESS ready=$([[ -n "$DOWNLOAD" ]] && echo 1 || echo 0) text=$TEXT" | tee -a out/size_probe.txt; fi
+              if [[ "$OK" == "1" && -n "$DOWNLOAD" ]]; then break; fi
+              sleep 1.5
             done
+            test -n "$DOWNLOAD"
+            printf '%s\n' "$DOWNLOAD" > "out/direct-url-$FORMAT.txt"
+
+            HEADERS="out/headers-$FORMAT.txt"
+            rm -f "$HEADERS" /tmp/onebyte
+            set +e
+            curl -sS -L -r 0-0 --connect-timeout 10 --max-time 30 \
+              -A "$UA" -H "Referer: $BASE/" -D "$HEADERS" -o /tmp/onebyte "$DOWNLOAD"
+            RC=$?
+            set -e
+            CRANGE=$(tr -d '\r' < "$HEADERS" | awk 'BEGIN{IGNORECASE=1} /^content-range:/ {v=$0} END{print v}')
+            CLEN=$(tr -d '\r' < "$HEADERS" | awk 'BEGIN{IGNORECASE=1} /^content-length:/ {v=$2} END{print v}')
+            TOTAL=$(printf '%s\n' "$CRANGE" | sed -n 's#.*[/]##p')
+            echo "range_rc=$RC content_range=$CRANGE content_length=$CLEN total_bytes=$TOTAL onebyte=$(wc -c </tmp/onebyte 2>/dev/null || echo 0)" | tee -a out/size_probe.txt
           done
-          test "$SUCCESS" -eq 1
 
-      - name: Verify media
-        shell: bash
-        run: |
-          set -euo pipefail
-          FILE='out/BUN1qw0yH6M.mp4'
-          test -s "$FILE"
-          ffprobe -v error -show_entries stream=codec_type,codec_name,width,height,duration -show_entries format=duration -of json "$FILE" | tee out/ffprobe.json
-          HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$FILE")
-          AUDIO=$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$FILE")
-          DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$FILE")
-          test -n "$HEIGHT"
-          test -n "$AUDIO"
-          echo "height=$HEIGHT audio=$AUDIO duration=$DURATION" | tee out/quality.txt
-          sha256sum "$FILE" | tee out/SHA256SUMS.txt
-          stat -c 'bytes=%s' "$FILE" | tee -a out/quality.txt
-
-      - name: Upload result
+      - name: Upload probe
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: youtube-BUN1qw0yH6M
+          name: youtube-BUN1qw0yH6M-size-probe
           path: out/
-          if-no-files-found: warn
-          compression-level: 0
+          if-no-files-found: error
           retention-days: 1
