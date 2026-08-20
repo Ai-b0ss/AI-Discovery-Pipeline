@@ -11,59 +11,152 @@ permissions:
 jobs:
   rescue:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve fresh 720p and 1080p direct URLs
+      - name: Resolve and download 720p
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p out
+          mkdir -p out/chunks out/meta
           UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
           VIDEO='https://www.youtube.com/watch?v=BUN1qw0yH6M'
           BASE='https://p.savenow.to'
-          : > out/resolve.log
+          FORMAT=720
 
-          for FORMAT in 720 1080; do
-            INIT="out/init-$FORMAT.json"
-            CODE=$(curl -sS -L --connect-timeout 10 --max-time 45 -o "$INIT" -w '%{http_code}' \
-              -A "$UA" -H 'Accept: application/json,*/*' -H "Referer: $BASE/api/button/" \
-              --get "$BASE/api/v2/download" \
-              --data-urlencode 'button=1' \
-              --data-urlencode "format=$FORMAT" \
-              --data-urlencode 'iframe_source=direct-iframe' \
-              --data-urlencode "url=$VIDEO")
-            ID=$(jq -r '.id // empty' "$INIT")
-            PURL=$(jq -r '.progress_url // empty' "$INIT")
-            TITLE=$(jq -r '.title // empty' "$INIT")
-            echo "format=$FORMAT init_http=$CODE id=$ID title=$TITLE" | tee -a out/resolve.log
-            test -n "$ID"
+          INIT='out/meta/init-720.json'
+          curl -fsSL --connect-timeout 10 --max-time 45 -o "$INIT" \
+            -A "$UA" -H 'Accept: application/json,*/*' -H "Referer: $BASE/api/button/" \
+            --get "$BASE/api/v2/download" \
+            --data-urlencode 'button=1' \
+            --data-urlencode "format=$FORMAT" \
+            --data-urlencode 'iframe_source=direct-iframe' \
+            --data-urlencode "url=$VIDEO"
+          ID=$(jq -r '.id // empty' "$INIT")
+          PURL=$(jq -r '.progress_url // empty' "$INIT")
+          TITLE=$(jq -r '.title // empty' "$INIT")
+          test -n "$ID"
+          printf 'title=%s\nid=%s\nformat=%s\n' "$TITLE" "$ID" "$FORMAT" | tee out/meta/rescue.txt
 
-            DOWNLOAD=''
-            for N in $(seq 1 120); do
-              if [[ "$N" == "1" && -n "$PURL" ]]; then POLL="$PURL"; else POLL="$BASE/api/progress?id=$ID"; fi
-              PROG="out/progress-$FORMAT.json"
-              PCODE=$(curl -sS -L --connect-timeout 10 --max-time 30 -o "$PROG" -w '%{http_code}' \
-                -A "$UA" -H 'Accept: application/json,*/*' -H "Referer: $BASE/" "$POLL" || true)
-              OK=$(jq -r '.success // 0' "$PROG" 2>/dev/null || echo 0)
-              PROGRESS=$(jq -r '.progress // empty' "$PROG" 2>/dev/null || true)
-              DOWNLOAD=$(jq -r '.download_url // empty' "$PROG" 2>/dev/null || true)
-              TEXT=$(jq -r '.text // empty' "$PROG" 2>/dev/null || true)
-              if (( N == 1 || N % 10 == 0 )); then echo "format=$FORMAT poll=$N http=$PCODE success=$OK progress=$PROGRESS ready=$([[ -n "$DOWNLOAD" ]] && echo 1 || echo 0) text=$TEXT" | tee -a out/resolve.log; fi
-              if [[ "$OK" == "1" && -n "$DOWNLOAD" ]]; then break; fi
-              sleep 1.5
-            done
-            test -n "$DOWNLOAD"
-            printf '%s\n' "$DOWNLOAD" > "out/direct-url-$FORMAT.txt"
-            echo "format=$FORMAT RESOLVED" | tee -a out/resolve.log
+          DOWNLOAD=''
+          for N in $(seq 1 180); do
+            if [[ "$N" == "1" && -n "$PURL" ]]; then POLL="$PURL"; else POLL="$BASE/api/progress?id=$ID"; fi
+            PROG='out/meta/progress-720.json'
+            curl -fsSL --connect-timeout 10 --max-time 30 -o "$PROG" \
+              -A "$UA" -H 'Accept: application/json,*/*' -H "Referer: $BASE/" "$POLL" || true
+            OK=$(jq -r '.success // 0' "$PROG" 2>/dev/null || echo 0)
+            PROGRESS=$(jq -r '.progress // empty' "$PROG" 2>/dev/null || true)
+            DOWNLOAD=$(jq -r '.download_url // empty' "$PROG" 2>/dev/null || true)
+            if (( N == 1 || N % 10 == 0 )); then echo "poll=$N success=$OK progress=$PROGRESS ready=$([[ -n "$DOWNLOAD" ]] && echo 1 || echo 0)" | tee -a out/meta/rescue.txt; fi
+            if [[ "$OK" == "1" && -n "$DOWNLOAD" ]]; then break; fi
+            sleep 1.5
           done
+          test -n "$DOWNLOAD"
+          printf '%s\n' "$DOWNLOAD" > out/meta/direct-url-720.txt
 
-      - name: Upload resolver result
+          curl -fL --retry 3 --retry-delay 1 --connect-timeout 10 --max-time 1500 \
+            -A "$UA" -H "Referer: $BASE/" "$DOWNLOAD" -o out/BUN1qw0yH6M-720p.mp4
+          stat -c 'bytes=%s' out/BUN1qw0yH6M-720p.mp4 | tee -a out/meta/rescue.txt
+          sha256sum out/BUN1qw0yH6M-720p.mp4 | tee out/meta/FULL_SHA256SUMS.txt
+
+      - name: Install ffmpeg and verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg >/dev/null
+          FILE='out/BUN1qw0yH6M-720p.mp4'
+          ffprobe -v error -show_entries stream=codec_type,codec_name,width,height,duration -show_entries format=format_name,duration,size -of json "$FILE" | tee out/meta/ffprobe.json
+          HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$FILE")
+          AUDIO=$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$FILE")
+          DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$FILE")
+          test -n "$HEIGHT"
+          test -n "$AUDIO"
+          printf 'height=%s\naudio=%s\nduration=%s\n' "$HEIGHT" "$AUDIO" "$DURATION" | tee out/meta/quality.txt
+
+      - name: Split and hash chunks
+        shell: bash
+        run: |
+          set -euo pipefail
+          split -b 400M -d -a 2 out/BUN1qw0yH6M-720p.mp4 out/chunks/chunk-
+          sha256sum out/chunks/chunk-* | tee out/meta/CHUNK_SHA256SUMS.txt
+          stat -c '%n %s' out/chunks/chunk-* | tee out/meta/CHUNK_SIZES.txt
+          COUNT=$(find out/chunks -maxdepth 1 -type f -name 'chunk-*' | wc -l)
+          echo "chunk_count=$COUNT" | tee -a out/meta/rescue.txt
+          test "$COUNT" -le 8
+          rm -f out/BUN1qw0yH6M-720p.mp4
+
+      - name: Upload manifest
         uses: actions/upload-artifact@v4
         with:
-          name: youtube-BUN1qw0yH6M-direct-urls
-          path: out/
-          if-no-files-found: error
+          name: youtube-BUN1qw0yH6M-manifest
+          path: out/meta/
+          compression-level: 6
+          retention-days: 1
+
+      - name: Upload chunk 00
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-BUN1qw0yH6M-chunk-00
+          path: out/chunks/chunk-00
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 1
+      - name: Upload chunk 01
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-BUN1qw0yH6M-chunk-01
+          path: out/chunks/chunk-01
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 1
+      - name: Upload chunk 02
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-BUN1qw0yH6M-chunk-02
+          path: out/chunks/chunk-02
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 1
+      - name: Upload chunk 03
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-BUN1qw0yH6M-chunk-03
+          path: out/chunks/chunk-03
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 1
+      - name: Upload chunk 04
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-BUN1qw0yH6M-chunk-04
+          path: out/chunks/chunk-04
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 1
+      - name: Upload chunk 05
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-BUN1qw0yH6M-chunk-05
+          path: out/chunks/chunk-05
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 1
+      - name: Upload chunk 06
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-BUN1qw0yH6M-chunk-06
+          path: out/chunks/chunk-06
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 1
+      - name: Upload chunk 07
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-BUN1qw0yH6M-chunk-07
+          path: out/chunks/chunk-07
+          if-no-files-found: ignore
+          compression-level: 0
           retention-days: 1
