@@ -1,0 +1,54 @@
+name: FREE FABRIC YouTube Rescue
+
+on:
+  pull_request:
+    paths:
+      - '.free-fabric/youtube-rescue/**'
+
+permissions:
+  contents: read
+
+jobs:
+  rescue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install yt-dlp
+        run: python -m pip install --disable-pip-version-check --no-cache-dir yt-dlp
+
+      - name: Download video
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          yt-dlp \
+            --no-playlist \
+            --merge-output-format mp4 \
+            --remux-video mp4 \
+            -f "bv*[height<=1080][vcodec^=avc1]+ba[ext=m4a]/b[height<=1080][ext=mp4]/b[height<=1080]" \
+            -o 'out/BUN1qw0yH6M.%(ext)s' \
+            'https://youtu.be/BUN1qw0yH6M'
+
+      - name: Verify media
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="$(find out -maxdepth 1 -type f -name 'BUN1qw0yH6M*.mp4' | head -n1)"
+          test -n "$FILE"
+          ffprobe -v error -show_entries stream=codec_type,codec_name,width,height -of json "$FILE" | tee out/ffprobe.json
+          ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$FILE" | grep -Eq '^[0-9]+$'
+          ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$FILE" | grep -q .
+          sha256sum "$FILE" | tee out/SHA256SUMS.txt
+          du -h "$FILE"
+
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-BUN1qw0yH6M
+          path: out/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
