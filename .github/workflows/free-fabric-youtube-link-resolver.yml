@@ -1,0 +1,68 @@
+name: FREE FABRIC YouTube HQ Direct Links
+
+on:
+  pull_request:
+    paths:
+      - '.free-fabric/youtube-rescue/**'
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve 1440p and 1080p direct URLs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+          VIDEO='https://www.youtube.com/watch?v=BUN1qw0yH6M'
+          BASE='https://p.savenow.to'
+          TITLE=''
+          U1440=''
+          U1080=''
+          resolve_one() {
+            FORMAT="$1"
+            INIT="out/init-$FORMAT.json"
+            if ! curl -fsSL --connect-timeout 10 --max-time 45 -o "$INIT" \
+              -A "$UA" -H 'Accept: application/json,*/*' -H "Referer: $BASE/api/button/" \
+              --get "$BASE/api/v2/download" \
+              --data-urlencode 'button=1' \
+              --data-urlencode "format=$FORMAT" \
+              --data-urlencode 'iframe_source=direct-iframe' \
+              --data-urlencode "url=$VIDEO"; then return 1; fi
+            ID=$(jq -r '.id // empty' "$INIT")
+            PURL=$(jq -r '.progress_url // empty' "$INIT")
+            T=$(jq -r '.title // empty' "$INIT")
+            [[ -n "$TITLE" ]] || TITLE="$T"
+            [[ -n "$ID" ]] || return 1
+            DOWNLOAD=''
+            for N in $(seq 1 180); do
+              if [[ "$N" == "1" && -n "$PURL" ]]; then POLL="$PURL"; else POLL="$BASE/api/progress?id=$ID"; fi
+              PROG="out/progress-$FORMAT.json"
+              curl -fsSL --connect-timeout 10 --max-time 30 -o "$PROG" \
+                -A "$UA" -H 'Accept: application/json,*/*' -H "Referer: $BASE/" "$POLL" || true
+              OK=$(jq -r '.success // 0' "$PROG" 2>/dev/null || echo 0)
+              DOWNLOAD=$(jq -r '.download_url // empty' "$PROG" 2>/dev/null || true)
+              if [[ "$OK" == "1" && -n "$DOWNLOAD" ]]; then break; fi
+              sleep 1.5
+            done
+            [[ -n "$DOWNLOAD" ]] || return 1
+            printf '%s' "$DOWNLOAD"
+          }
+          U1440=$(resolve_one 1440 || true)
+          U1080=$(resolve_one 1080 || true)
+          test -n "$U1440$U1080"
+          jq -n --arg video_id 'BUN1qw0yH6M' --arg title "$TITLE" --arg u1440 "$U1440" --arg u1080 "$U1080" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{video_id:$video_id,title:$title,resolved_at_utc:$now,url_1440:$u1440,url_1080:$u1080}' > out/urls.json
+      - name: Upload tiny resolver result
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-BUN1qw0yH6M-hq-direct-urls
+          path: out/urls.json
+          retention-days: 1
+          compression-level: 6
