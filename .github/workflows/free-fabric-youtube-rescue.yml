@@ -16,56 +16,63 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve through loader.to worker API
+      - name: Resolve through current savenow worker API
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p out
           UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-          BASE='https://loader.to'
           VIDEO='https://www.youtube.com/watch?v=BUN1qw0yH6M'
-          : > out/loader_attempts.txt
+          : > out/savenow_attempts.txt
           SUCCESS=0
 
           for FORMAT in 1080 720; do
-            echo "request_format=$FORMAT" | tee -a out/loader_attempts.txt
-            INFO=/tmp/loader-info.json
+            echo "request_format=$FORMAT" | tee -a out/savenow_attempts.txt
+            INFO=/tmp/savenow-info.json
             rm -f "$INFO"
             CODE=$(curl -sS -L --connect-timeout 10 --max-time 45 -o "$INFO" -w '%{http_code}' \
               -A "$UA" \
-              -H 'accept: */*' \
-              -H 'referer: https://loader.to/' \
-              --get "$BASE/api/download" \
-              --data-urlencode "url=$VIDEO" \
-              --data-urlencode 'add_info=1' \
-              --data-urlencode "format=$FORMAT" || true)
+              -H 'Accept: application/json,*/*' \
+              -H 'Origin: https://en.loader.to' \
+              -H 'Referer: https://en.loader.to/' \
+              --get 'https://p.savenow.to/ajax/download.php' \
+              --data-urlencode "format=$FORMAT" \
+              --data-urlencode "url=$VIDEO" || true)
             ID=$(jq -r '.id // empty' "$INFO" 2>/dev/null || true)
-            PURL=$(jq -r '.progress_url // empty' "$INFO" 2>/dev/null || true)
-            MSG=$(jq -r '.message // empty' "$INFO" 2>/dev/null || true)
-            echo "info_http=$CODE id=$ID message=$MSG progress_url=$PURL" | tee -a out/loader_attempts.txt
+            if [[ -z "$ID" ]]; then
+              PURL0=$(jq -r '.progress_url // empty' "$INFO" 2>/dev/null || true)
+              [[ -n "$PURL0" ]] && ID=$(python -c 'import sys,urllib.parse; print(urllib.parse.parse_qs(urllib.parse.urlparse(sys.argv[1]).query).get("id",[""])[0])' "$PURL0")
+            fi
+            OK0=$(jq -r '.success // empty' "$INFO" 2>/dev/null || true)
+            TEXT0=$(jq -r '.text // .message // empty' "$INFO" 2>/dev/null || true)
+            echo "init_http=$CODE success=$OK0 id=$ID text=$TEXT0" | tee -a out/savenow_attempts.txt
             [[ -n "$ID" ]] || continue
-            [[ -n "$PURL" ]] || PURL="https://p.savenow.to/api/progress?id=$ID"
 
             DOWNLOAD=''
-            for N in $(seq 1 100); do
-              PROG=/tmp/loader-progress.json
+            for N in $(seq 1 120); do
+              PROG=/tmp/savenow-progress.json
               PCODE=$(curl -sS -L --connect-timeout 10 --max-time 30 -o "$PROG" -w '%{http_code}' \
-                -A "$UA" -H 'accept: application/json,*/*' "$PURL" || true)
-              OK=$(jq -r '.success // 0' "$PROG" 2>/dev/null || echo 0)
-              DOWNLOAD=$(jq -r '.download_url // .download // empty' "$PROG" 2>/dev/null || true)
+                -A "$UA" \
+                -H 'Accept: application/json,*/*' \
+                -H 'Origin: https://en.loader.to' \
+                -H 'Referer: https://en.loader.to/' \
+                "https://p.savenow.to/api/progress?id=$ID" || true)
               PROGRESS=$(jq -r '.progress // empty' "$PROG" 2>/dev/null || true)
-              if (( N == 1 || N % 10 == 0 )); then echo "poll=$N http=$PCODE success=$OK progress=$PROGRESS" | tee -a out/loader_attempts.txt; fi
-              if [[ "$OK" == "1" && -n "$DOWNLOAD" ]]; then break; fi
-              sleep 2
+              DOWNLOAD=$(jq -r '.download_url // .download // empty' "$PROG" 2>/dev/null || true)
+              TEXT=$(jq -r '.text // .message // empty' "$PROG" 2>/dev/null || true)
+              if (( N == 1 || N % 10 == 0 )); then echo "poll=$N http=$PCODE progress=$PROGRESS text=$TEXT ready=$([[ -n "$DOWNLOAD" ]] && echo 1 || echo 0)" | tee -a out/savenow_attempts.txt; fi
+              if [[ -n "$DOWNLOAD" && "$PROGRESS" == "1000" ]]; then break; fi
+              if [[ -n "$DOWNLOAD" ]] && [[ "$(jq -r '.success // 0' "$PROG" 2>/dev/null || echo 0)" == "1" ]]; then break; fi
+              sleep 1.5
             done
             [[ -n "$DOWNLOAD" ]] || continue
-            echo "download_ready=1 format=$FORMAT" | tee -a out/loader_attempts.txt
+            echo "download_ready=1 format=$FORMAT" | tee -a out/savenow_attempts.txt
 
             rm -f out/BUN1qw0yH6M.mp4
             if curl -fL --retry 2 --retry-delay 1 --connect-timeout 10 --max-time 900 \
-                  -A "$UA" -H 'referer: https://loader.to/' "$DOWNLOAD" -o out/BUN1qw0yH6M.mp4; then
-              cp "$INFO" out/loader_info.json
-              cp /tmp/loader-progress.json out/loader_progress.json
+                  -A "$UA" -H 'Referer: https://en.loader.to/' "$DOWNLOAD" -o out/BUN1qw0yH6M.mp4; then
+              cp "$INFO" out/savenow_info.json
+              cp /tmp/savenow-progress.json out/savenow_progress.json
               SUCCESS=1
               break
             fi
@@ -78,7 +85,7 @@ jobs:
           set -euo pipefail
           FILE='out/BUN1qw0yH6M.mp4'
           test -s "$FILE"
-          ffprobe -v error -show_entries stream=codec_type,codec_name,width,height,duration -of json "$FILE" | tee out/ffprobe.json
+          ffprobe -v error -show_entries stream=codec_type,codec_name,width,height,duration -show_entries format=duration -of json "$FILE" | tee out/ffprobe.json
           HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$FILE")
           AUDIO=$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$FILE")
           DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$FILE")
