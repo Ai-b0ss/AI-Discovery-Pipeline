@@ -1,5 +1,5 @@
 FREE FABRIC one-shot YouTube rescue trigger
 video_id=BUN1qw0yH6M
-requested_at_utc=2026-08-20T10:34:00Z
-retry=15
-strategy=final-verified-chunked-720p-delivery
+requested_at_utc=2026-08-20T11:34:00Z
+retry=16
+strategy=probe-1440p-then-1080p-hq
