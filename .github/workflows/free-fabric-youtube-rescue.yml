@@ -16,36 +16,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download via opt-in cobalt community instances
+      - name: Download via current community cobalt APIs
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p out
-          REGISTRY='https://instances.cobalt.best/api/instances.json'
-          curl -fsSL --max-time 20 "$REGISTRY" -o /tmp/instances.json
-          jq 'length' /tmp/instances.json
-
-          # instances.cobalt.best is an opt-in public community registry.
-          # Try a small bounded set, one request per instance, stopping on first success.
-          mapfile -t APIS < <(
-            jq -r '
-              map(select(.online.api == true and (.api // "") != ""))
-              | sort_by(-(.trust // 0), -(.score // 0))
-              | .[0:8][] | .api
-            ' /tmp/instances.json
+          APIS=(
+            'https://nuko-c.meowing.de'
+            'https://apicobalt.mgytr.top'
+            'https://cobalt-alpha.wolfy.love'
+            'https://melon.clxxped.lol'
+            'https://grapefruit.clxxped.lol'
+            'https://cobalt-api.lamps-dev.dev'
+            'https://api.qwkuns.me'
+            'https://capi.3kh0.net'
           )
 
-          test "${#APIS[@]}" -gt 0
           SUCCESS=0
           : > out/cobalt_attempts.txt
-
           for API in "${APIS[@]}"; do
             echo "trying $API" | tee -a out/cobalt_attempts.txt
             RESP=/tmp/cobalt-response.json
-            CODE=$(curl -sS --connect-timeout 8 --max-time 35 \
+            rm -f "$RESP"
+            CODE=$(curl -sS --connect-timeout 8 --max-time 45 \
               -o "$RESP" -w '%{http_code}' \
               -H 'Accept: application/json' \
               -H 'Content-Type: application/json' \
+              -H 'User-Agent: Mozilla/5.0' \
               --data-binary '{"url":"https://youtu.be/BUN1qw0yH6M","videoQuality":"1080","youtubeVideoCodec":"h264","youtubeVideoContainer":"mp4","downloadMode":"auto","alwaysProxy":true,"filenameStyle":"basic"}' \
               "${API%/}/" || true)
 
@@ -64,7 +61,6 @@ jobs:
               fi
             fi
           done
-
           test "$SUCCESS" -eq 1
 
       - name: Verify media
