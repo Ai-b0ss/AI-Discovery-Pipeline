@@ -16,33 +16,71 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install yt-dlp
-        run: python -m pip install --disable-pip-version-check --no-cache-dir yt-dlp
-
-      - name: Download video
+      - name: Download via opt-in cobalt community instances
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p out
-          yt-dlp \
-            --no-playlist \
-            --merge-output-format mp4 \
-            --remux-video mp4 \
-            -f "bv*[height<=1080][vcodec^=avc1]+ba[ext=m4a]/b[height<=1080][ext=mp4]/b[height<=1080]" \
-            -o 'out/BUN1qw0yH6M.%(ext)s' \
-            'https://youtu.be/BUN1qw0yH6M'
+          REGISTRY='https://instances.cobalt.best/api/instances.json'
+          curl -fsSL --max-time 20 "$REGISTRY" -o /tmp/instances.json
+          jq 'length' /tmp/instances.json
+
+          # instances.cobalt.best is an opt-in public community registry.
+          # Try a small bounded set, one request per instance, stopping on first success.
+          mapfile -t APIS < <(
+            jq -r '
+              map(select(.online.api == true and (.api // "") != ""))
+              | sort_by(-(.trust // 0), -(.score // 0))
+              | .[0:8][] | .api
+            ' /tmp/instances.json
+          )
+
+          test "${#APIS[@]}" -gt 0
+          SUCCESS=0
+          : > out/cobalt_attempts.txt
+
+          for API in "${APIS[@]}"; do
+            echo "trying $API" | tee -a out/cobalt_attempts.txt
+            RESP=/tmp/cobalt-response.json
+            CODE=$(curl -sS --connect-timeout 8 --max-time 35 \
+              -o "$RESP" -w '%{http_code}' \
+              -H 'Accept: application/json' \
+              -H 'Content-Type: application/json' \
+              --data-binary '{"url":"https://youtu.be/BUN1qw0yH6M","videoQuality":"1080","youtubeVideoCodec":"h264","youtubeVideoContainer":"mp4","downloadMode":"auto","alwaysProxy":true,"filenameStyle":"basic"}' \
+              "${API%/}/" || true)
+
+            STATUS=$(jq -r '.status // empty' "$RESP" 2>/dev/null || true)
+            ERR=$(jq -r '.error.code // empty' "$RESP" 2>/dev/null || true)
+            echo "http=$CODE status=$STATUS error=$ERR" | tee -a out/cobalt_attempts.txt
+
+            if [[ "$STATUS" == "tunnel" || "$STATUS" == "redirect" ]]; then
+              MEDIA=$(jq -r '.url' "$RESP")
+              NAME=$(jq -r '.filename // "BUN1qw0yH6M.mp4"' "$RESP")
+              echo "selected=$API filename=$NAME" | tee -a out/cobalt_attempts.txt
+              if curl -fL --retry 2 --retry-delay 1 --connect-timeout 10 --max-time 600 \
+                    -A 'Mozilla/5.0' "$MEDIA" -o out/BUN1qw0yH6M.mp4; then
+                SUCCESS=1
+                break
+              fi
+            fi
+          done
+
+          test "$SUCCESS" -eq 1
 
       - name: Verify media
         shell: bash
         run: |
           set -euo pipefail
-          FILE="$(find out -maxdepth 1 -type f -name 'BUN1qw0yH6M*.mp4' | head -n1)"
-          test -n "$FILE"
+          FILE='out/BUN1qw0yH6M.mp4'
+          test -s "$FILE"
           ffprobe -v error -show_entries stream=codec_type,codec_name,width,height -of json "$FILE" | tee out/ffprobe.json
-          ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$FILE" | grep -Eq '^[0-9]+$'
-          ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$FILE" | grep -q .
+          HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$FILE")
+          AUDIO=$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$FILE")
+          test -n "$HEIGHT"
+          test -n "$AUDIO"
+          echo "height=$HEIGHT audio=$AUDIO" | tee out/quality.txt
           sha256sum "$FILE" | tee out/SHA256SUMS.txt
-          du -h "$FILE"
+          stat -c 'bytes=%s' "$FILE" | tee -a out/quality.txt
 
       - name: Upload result
         uses: actions/upload-artifact@v4
