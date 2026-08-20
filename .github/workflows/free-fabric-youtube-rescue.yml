@@ -16,61 +16,110 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Node 22 for yt-dlp EJS
+      - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
-      - name: Install current yt-dlp with EJS
+      - name: Install browser driver
+        shell: bash
         run: |
-          python -m pip install --disable-pip-version-check --no-cache-dir 'yt-dlp[default]'
-          node --version
-          yt-dlp --version
+          npm init -y >/dev/null 2>&1
+          npm install playwright-core@latest
+          which google-chrome || which chromium || which chromium-browser
+          google-chrome --version || chromium --version || true
 
-      - name: Download with supported logged-out player clients
+      - name: Drive public hosted Button API
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p out
-          URL='https://youtu.be/BUN1qw0yH6M'
-          : > out/ytdlp_attempts.txt
-          SUCCESS=0
+          cat > /tmp/button.mjs <<'NODE'
+          import { chromium } from 'playwright-core';
+          import fs from 'node:fs';
+          const exe = ['/usr/bin/google-chrome','/usr/bin/chromium','/usr/bin/chromium-browser'].find(fs.existsSync);
+          if (!exe) throw new Error('No system Chromium/Chrome');
+          const browser = await chromium.launch({executablePath: exe, headless:true, args:['--no-sandbox']});
+          const context = await browser.newContext({acceptDownloads:true});
+          const page = await context.newPage();
+          const log=[];
+          page.on('console', m => log.push('console '+m.type()+': '+m.text()));
+          page.on('pageerror', e => log.push('pageerror: '+e.message));
+          page.on('requestfailed', r => log.push('requestfailed: '+r.url()+' '+(r.failure()?.errorText||'')));
+          page.on('popup', async p => { log.push('popup: '+p.url()); try { await p.close(); } catch {} });
 
-          CLIENTS=('default' 'web_embedded' 'tv_simply' 'visionos' 'ios' 'android_vr')
-          for CLIENT in "${CLIENTS[@]}"; do
-            echo "trying client=$CLIENT" | tee -a out/ytdlp_attempts.txt
-            rm -f out/BUN1qw0yH6M.* /tmp/ytdlp.log
-            set +e
-            yt-dlp -v \
-              --js-runtimes node \
-              --remote-components ejs:github \
-              --extractor-args "youtube:player_client=$CLIENT" \
-              --no-playlist \
-              --merge-output-format mp4 \
-              --remux-video mp4 \
-              -f 'bv*[height<=1080][vcodec^=avc1]+ba[ext=m4a]/b[height<=1080][ext=mp4]/b[height<=1080]/best' \
-              -o 'out/BUN1qw0yH6M.%(ext)s' \
-              "$URL" 2>&1 | tee /tmp/ytdlp.log
-            RC=${PIPESTATUS[0]}
-            set -e
-            echo "client=$CLIENT rc=$RC" | tee -a out/ytdlp_attempts.txt
-            tail -n 25 /tmp/ytdlp.log >> out/ytdlp_attempts.txt || true
-            FILE=$(find out -maxdepth 1 -type f -name 'BUN1qw0yH6M*.mp4' -size +100k | head -n1 || true)
-            if [[ "$RC" == "0" && -n "$FILE" ]]; then
-              mv "$FILE" out/BUN1qw0yH6M.mp4
-              echo "selected_client=$CLIENT" | tee -a out/ytdlp_attempts.txt
-              SUCCESS=1
-              break
-            fi
-          done
-          test "$SUCCESS" -eq 1
+          const src='https://p.savenow.to/api/button/?url='+encodeURIComponent('https://www.youtube.com/watch?v=BUN1qw0yH6M')+'&f=720';
+          log.push('goto '+src);
+          const resp=await page.goto(src,{waitUntil:'domcontentloaded',timeout:60000});
+          log.push('http '+(resp?.status() ?? 'none')+' final='+page.url());
+          await page.screenshot({path:'out/button-initial.png',fullPage:true});
+          fs.writeFileSync('out/button-initial.html',await page.content());
+
+          const texts=await page.locator('body').innerText().catch(()=> '');
+          log.push('body='+texts.slice(0,3000).replace(/\n/g,' | '));
+          const candidates=['#downloadButton','button','a'];
+          let clicked=false;
+          let downloadObj=null;
+
+          for (const sel of candidates) {
+            const loc=page.locator(sel);
+            const n=await loc.count().catch(()=>0);
+            for(let i=0;i<n;i++){
+              const el=loc.nth(i);
+              if(!(await el.isVisible().catch(()=>false))) continue;
+              const txt=(await el.innerText().catch(()=>''))+' '+(await el.getAttribute('href').catch(()=>''));
+              log.push('candidate '+sel+' '+i+' '+txt.slice(0,500));
+            }
+          }
+
+          for(let round=0;round<120 && !downloadObj;round++){
+            const btn=page.locator('#downloadButton');
+            if(!clicked && await btn.count() && await btn.isVisible().catch(()=>false)){
+              log.push('click #downloadButton round='+round);
+              const dp=page.waitForEvent('download',{timeout:5000}).catch(()=>null);
+              await btn.click({timeout:5000}).catch(e=>log.push('clickerr '+e.message));
+              downloadObj=await dp;
+              clicked=true;
+            }
+            if(downloadObj) break;
+
+            const links=await page.locator('a').evaluateAll(as=>as.map(a=>({text:(a.textContent||'').trim(),href:a.href||'',download:a.getAttribute('download')}))).catch(()=>[]);
+            for(const a of links){
+              if(a.href && a.href !== '#' && (/download|ocean|save|\.mp4|googlevideo|cdn/i.test(a.href) || /download/i.test(a.text))){
+                log.push('interesting-link '+JSON.stringify(a));
+                if(/^https?:/.test(a.href) && !/\/api\/button/.test(a.href)) fs.writeFileSync('out/direct_url.txt',a.href+'\n');
+              }
+            }
+            const body=(await page.locator('body').innerText().catch(()=>''));
+            if(/captcha|turnstile|verify you are human|cloudflare/i.test(body)){
+              log.push('HUMAN_CHALLENGE_DETECTED '+body.slice(0,1000).replace(/\n/g,' | '));
+              break;
+            }
+            await page.waitForTimeout(1500);
+          }
+
+          if(downloadObj){
+            log.push('download suggested='+downloadObj.suggestedFilename()+' url='+downloadObj.url());
+            await downloadObj.saveAs('out/BUN1qw0yH6M.mp4');
+          }
+          await page.screenshot({path:'out/button-final.png',fullPage:true}).catch(()=>{});
+          fs.writeFileSync('out/button-final.html',await page.content().catch(()=>''));
+          fs.writeFileSync('out/browser.log',log.join('\n')+'\n');
+          await browser.close();
+          NODE
+          node /tmp/button.mjs
+
+          if [[ ! -s out/BUN1qw0yH6M.mp4 && -s out/direct_url.txt ]]; then
+            URL=$(tail -n1 out/direct_url.txt)
+            curl -fL --retry 2 --retry-delay 1 --connect-timeout 10 --max-time 900 -A 'Mozilla/5.0' "$URL" -o out/BUN1qw0yH6M.mp4
+          fi
+          test -s out/BUN1qw0yH6M.mp4
 
       - name: Verify media
         shell: bash
         run: |
           set -euo pipefail
           FILE='out/BUN1qw0yH6M.mp4'
-          test -s "$FILE"
           ffprobe -v error -show_entries stream=codec_type,codec_name,width,height,duration -show_entries format=duration -of json "$FILE" | tee out/ffprobe.json
           HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$FILE")
           AUDIO=$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$FILE")
@@ -82,6 +131,7 @@ jobs:
           stat -c 'bytes=%s' "$FILE" | tee -a out/quality.txt
 
       - name: Upload result
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: youtube-BUN1qw0yH6M
