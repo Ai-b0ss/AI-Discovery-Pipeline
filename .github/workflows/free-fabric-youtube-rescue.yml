@@ -1,9 +1,9 @@
 name: FREE FABRIC YouTube Rescue
 
 on:
-  pull_request:
-    paths:
-      - '.free-fabric/youtube-rescue/**'
+  push:
+    branches:
+      - 'free-fabric/youtube-BUN1qw0yH6M'
 
 permissions:
   contents: read
