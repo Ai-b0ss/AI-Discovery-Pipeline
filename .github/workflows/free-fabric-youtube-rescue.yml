@@ -11,12 +11,12 @@ permissions:
 jobs:
   rescue:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve through hosted Button API v2
+      - name: Resolve through exact hosted Button API v2 flow
         shell: bash
         run: |
           set -euo pipefail
@@ -29,54 +29,51 @@ jobs:
 
           for BASE in "${BASES[@]}"; do
             for FORMAT in 1080 720; do
+              TAG=$(echo "$BASE-$FORMAT" | sed 's#https://##;s#[./:]#-#g')
               echo "base=$BASE format=$FORMAT" | tee -a out/button_v2_attempts.txt
-              INIT=/tmp/button-v2-init.json
-              rm -f "$INIT"
+              INIT=/tmp/init.json
               CODE=$(curl -sS -L --connect-timeout 10 --max-time 45 -o "$INIT" -w '%{http_code}' \
-                -A "$UA" \
-                -H 'Accept: application/json,*/*' \
-                -H "Referer: $BASE/api/button/?url=$(python -c 'import urllib.parse; print(urllib.parse.quote("https://www.youtube.com/watch?v=BUN1qw0yH6M", safe=""))')&f=$FORMAT" \
+                -A "$UA" -H 'Accept: application/json,*/*' \
+                -H "Referer: $BASE/api/button/" \
                 --get "$BASE/api/v2/download" \
                 --data-urlencode 'button=1' \
                 --data-urlencode "format=$FORMAT" \
                 --data-urlencode 'iframe_source=direct-iframe' \
                 --data-urlencode "url=$VIDEO" || true)
-
+              cp "$INIT" "out/$TAG-init.json" 2>/dev/null || true
               ID=$(jq -r '.id // empty' "$INIT" 2>/dev/null || true)
               PURL=$(jq -r '.progress_url // empty' "$INIT" 2>/dev/null || true)
               ERR=$(jq -r '.text // .message // .error // empty' "$INIT" 2>/dev/null || true)
               echo "init_http=$CODE id=$ID progress_url=$PURL err=$ERR" | tee -a out/button_v2_attempts.txt
-              cp "$INIT" "out/init-${FORMAT}-$(echo "$BASE" | sed 's#https://##;s#[./]#-#g').json" 2>/dev/null || true
               [[ -n "$ID" ]] || continue
-              [[ -n "$PURL" ]] || PURL="$BASE/api/progress?id=$ID"
 
               DOWNLOAD=''
-              ALTS=''
-              for N in $(seq 1 140); do
-                PROG=/tmp/button-v2-progress.json
-                rm -f "$PROG"
+              for N in $(seq 1 120); do
+                # Live button JS uses provided progress_url once, then BASE/api/progress?id=ID.
+                if [[ "$N" == "1" && -n "$PURL" ]]; then
+                  POLL="$PURL"
+                else
+                  POLL="$BASE/api/progress?id=$ID"
+                fi
+                PROG=/tmp/progress.json
                 PCODE=$(curl -sS -L --connect-timeout 10 --max-time 30 -o "$PROG" -w '%{http_code}' \
-                  -A "$UA" \
-                  -H 'Accept: application/json,*/*' \
-                  -H "Referer: $BASE/" \
-                  "$PURL" || true)
-                PROGRESS=$(jq -r '.progress // empty' "$PROG" 2>/dev/null || true)
+                  -A "$UA" -H 'Accept: application/json,*/*' -H "Referer: $BASE/" "$POLL" || true)
                 OK=$(jq -r '.success // 0' "$PROG" 2>/dev/null || echo 0)
+                PROGRESS=$(jq -r '.progress // empty' "$PROG" 2>/dev/null || true)
                 DOWNLOAD=$(jq -r '.download_url // empty' "$PROG" 2>/dev/null || true)
                 TEXT=$(jq -r '.text // .message // empty' "$PROG" 2>/dev/null || true)
-                if (( N == 1 || N % 10 == 0 )); then
+                if (( N == 1 || N % 5 == 0 )); then
                   echo "poll=$N http=$PCODE success=$OK progress=$PROGRESS ready=$([[ -n "$DOWNLOAD" ]] && echo 1 || echo 0) text=$TEXT" | tee -a out/button_v2_attempts.txt
                 fi
-                if [[ -n "$DOWNLOAD" && "$OK" == "1" ]]; then break; fi
-                if [[ -n "$TEXT" && "$OK" != "1" && "$PROGRESS" == "1000" ]]; then break; fi
+                if [[ "$OK" == "1" && -n "$DOWNLOAD" ]]; then break; fi
+                if [[ -n "$TEXT" ]]; then echo "terminal_text=$TEXT" | tee -a out/button_v2_attempts.txt; break; fi
                 sleep 1.5
               done
-
-              cp /tmp/button-v2-progress.json "out/progress-${FORMAT}-$(echo "$BASE" | sed 's#https://##;s#[./]#-#g').json" 2>/dev/null || true
+              cp /tmp/progress.json "out/$TAG-progress.json" 2>/dev/null || true
               [[ -n "$DOWNLOAD" ]] || continue
-              echo "download_ready base=$BASE format=$FORMAT" | tee -a out/button_v2_attempts.txt
-              printf '%s\n' "$DOWNLOAD" > out/direct_url.txt
 
+              printf '%s\n' "$DOWNLOAD" > out/direct_url.txt
+              echo "download_ready base=$BASE format=$FORMAT" | tee -a out/button_v2_attempts.txt
               rm -f out/BUN1qw0yH6M.mp4
               if curl -fL --retry 2 --retry-delay 1 --connect-timeout 10 --max-time 900 \
                     -A "$UA" -H "Referer: $BASE/" "$DOWNLOAD" -o out/BUN1qw0yH6M.mp4; then
