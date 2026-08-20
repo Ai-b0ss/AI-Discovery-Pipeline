@@ -30,7 +30,7 @@ jobs:
             echo "format=$FORMAT" | tee -a out/size_probe.txt
             INIT="out/init-$FORMAT.json"
             CODE=$(curl -sS -L --connect-timeout 10 --max-time 45 -o "$INIT" -w '%{http_code}' \
-              -A "$UA" -H 'Accept: application/json,*/*' -H "$BASE/api/button/:" \
+              -A "$UA" -H 'Accept: application/json,*/*' -H "Referer: $BASE/api/button/" \
               --get "$BASE/api/v2/download" \
               --data-urlencode 'button=1' \
               --data-urlencode "format=$FORMAT" \
