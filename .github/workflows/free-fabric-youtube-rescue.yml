@@ -11,55 +11,69 @@ permissions:
 jobs:
   rescue:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download via current community cobalt APIs
+      - name: Resolve and download via Piped APIs
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p out
           APIS=(
-            'https://nuko-c.meowing.de'
-            'https://apicobalt.mgytr.top'
-            'https://cobalt-alpha.wolfy.love'
-            'https://melon.clxxped.lol'
-            'https://grapefruit.clxxped.lol'
-            'https://cobalt-api.lamps-dev.dev'
-            'https://api.qwkuns.me'
-            'https://capi.3kh0.net'
+            'https://pipedapi.kavin.rocks'
+            'https://pipedapi.tokhmi.xyz'
+            'https://pipedapi.moomoo.me'
+            'https://pipedapi.syncpundit.io'
+            'https://api-piped.mha.fi'
+            'https://piped-api.garudalinux.org'
           )
-
+          : > out/piped_attempts.txt
           SUCCESS=0
-          : > out/cobalt_attempts.txt
+
           for API in "${APIS[@]}"; do
-            echo "trying $API" | tee -a out/cobalt_attempts.txt
-            RESP=/tmp/cobalt-response.json
-            rm -f "$RESP"
-            CODE=$(curl -sS --connect-timeout 8 --max-time 45 \
-              -o "$RESP" -w '%{http_code}' \
-              -H 'Accept: application/json' \
-              -H 'Content-Type: application/json' \
-              -H 'User-Agent: Mozilla/5.0' \
-              --data-binary '{"url":"https://youtu.be/BUN1qw0yH6M","videoQuality":"1080","youtubeVideoCodec":"h264","youtubeVideoContainer":"mp4","downloadMode":"auto","alwaysProxy":true,"filenameStyle":"basic"}' \
-              "${API%/}/" || true)
+            echo "trying $API" | tee -a out/piped_attempts.txt
+            META=/tmp/piped.json
+            rm -f "$META"
+            CODE=$(curl -sS -L --connect-timeout 8 --max-time 35 -o "$META" -w '%{http_code}' \
+              "$API/streams/BUN1qw0yH6M" || true)
+            VS=$(jq -r '.videoStreams | length // 0' "$META" 2>/dev/null || echo 0)
+            AS=$(jq -r '.audioStreams | length // 0' "$META" 2>/dev/null || echo 0)
+            TITLE=$(jq -r '.title // empty' "$META" 2>/dev/null || true)
+            echo "http=$CODE videoStreams=$VS audioStreams=$AS title=$TITLE" | tee -a out/piped_attempts.txt
+            [[ "$VS" =~ ^[0-9]+$ ]] || VS=0
+            [[ "$AS" =~ ^[0-9]+$ ]] || AS=0
+            if (( VS < 1 )); then continue; fi
 
-            STATUS=$(jq -r '.status // empty' "$RESP" 2>/dev/null || true)
-            ERR=$(jq -r '.error.code // empty' "$RESP" 2>/dev/null || true)
-            echo "http=$CODE status=$STATUS error=$ERR" | tee -a out/cobalt_attempts.txt
+            VIDEO_URL=$(jq -r '[.videoStreams[] | select(.url != null and (.height // 0) <= 1080)] | sort_by(.height // 0, .bitrate // 0) | reverse | .[0].url // empty' "$META")
+            VIDEO_ONLY=$(jq -r '[.videoStreams[] | select(.url != null and (.height // 0) <= 1080)] | sort_by(.height // 0, .bitrate // 0) | reverse | .[0].videoOnly // true' "$META")
+            AUDIO_URL=$(jq -r '[.audioStreams[] | select(.url != null)] | sort_by(.bitrate // 0) | reverse | .[0].url // empty' "$META")
+            HEIGHT=$(jq -r '[.videoStreams[] | select(.url != null and (.height // 0) <= 1080)] | sort_by(.height // 0, .bitrate // 0) | reverse | .[0].height // 0' "$META")
+            echo "selected_height=$HEIGHT videoOnly=$VIDEO_ONLY" | tee -a out/piped_attempts.txt
+            test -n "$VIDEO_URL" || continue
 
-            if [[ "$STATUS" == "tunnel" || "$STATUS" == "redirect" ]]; then
-              MEDIA=$(jq -r '.url' "$RESP")
-              NAME=$(jq -r '.filename // "BUN1qw0yH6M.mp4"' "$RESP")
-              echo "selected=$API filename=$NAME" | tee -a out/cobalt_attempts.txt
-              if curl -fL --retry 2 --retry-delay 1 --connect-timeout 10 --max-time 600 \
-                    -A 'Mozilla/5.0' "$MEDIA" -o out/BUN1qw0yH6M.mp4; then
-                SUCCESS=1
-                break
-              fi
+            rm -f /tmp/video.part /tmp/audio.part out/BUN1qw0yH6M.mp4
+            if ! curl -fL --retry 2 --retry-delay 1 --connect-timeout 10 --max-time 600 \
+                 -A 'Mozilla/5.0' "$VIDEO_URL" -o /tmp/video.part; then
+              continue
             fi
+
+            if [[ "$VIDEO_ONLY" == "false" ]]; then
+              cp /tmp/video.part out/BUN1qw0yH6M.mp4
+            else
+              test -n "$AUDIO_URL" || continue
+              if ! curl -fL --retry 2 --retry-delay 1 --connect-timeout 10 --max-time 600 \
+                   -A 'Mozilla/5.0' "$AUDIO_URL" -o /tmp/audio.part; then
+                continue
+              fi
+              ffmpeg -y -v warning -i /tmp/video.part -i /tmp/audio.part -map 0:v:0 -map 1:a:0 -c copy -movflags +faststart out/BUN1qw0yH6M.mp4
+            fi
+
+            cp "$META" out/piped_metadata.json
+            echo "selected_api=$API" | tee -a out/piped_attempts.txt
+            SUCCESS=1
+            break
           done
           test "$SUCCESS" -eq 1
 
