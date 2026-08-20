@@ -16,63 +16,49 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve through current savenow worker API
+      - name: Set up Node 22 for yt-dlp EJS
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install current yt-dlp with EJS
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir 'yt-dlp[default]'
+          node --version
+          yt-dlp --version
+
+      - name: Download with supported logged-out player clients
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p out
-          UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-          VIDEO='https://www.youtube.com/watch?v=BUN1qw0yH6M'
-          : > out/savenow_attempts.txt
+          URL='https://youtu.be/BUN1qw0yH6M'
+          : > out/ytdlp_attempts.txt
           SUCCESS=0
 
-          for FORMAT in 1080 720; do
-            echo "request_format=$FORMAT" | tee -a out/savenow_attempts.txt
-            INFO=/tmp/savenow-info.json
-            rm -f "$INFO"
-            CODE=$(curl -sS -L --connect-timeout 10 --max-time 45 -o "$INFO" -w '%{http_code}' \
-              -A "$UA" \
-              -H 'Accept: application/json,*/*' \
-              -H 'Origin: https://en.loader.to' \
-              -H 'Referer: https://en.loader.to/' \
-              --get 'https://p.savenow.to/ajax/download.php' \
-              --data-urlencode "format=$FORMAT" \
-              --data-urlencode "url=$VIDEO" || true)
-            ID=$(jq -r '.id // empty' "$INFO" 2>/dev/null || true)
-            if [[ -z "$ID" ]]; then
-              PURL0=$(jq -r '.progress_url // empty' "$INFO" 2>/dev/null || true)
-              [[ -n "$PURL0" ]] && ID=$(python -c 'import sys,urllib.parse; print(urllib.parse.parse_qs(urllib.parse.urlparse(sys.argv[1]).query).get("id",[""])[0])' "$PURL0")
-            fi
-            OK0=$(jq -r '.success // empty' "$INFO" 2>/dev/null || true)
-            TEXT0=$(jq -r '.text // .message // empty' "$INFO" 2>/dev/null || true)
-            echo "init_http=$CODE success=$OK0 id=$ID text=$TEXT0" | tee -a out/savenow_attempts.txt
-            [[ -n "$ID" ]] || continue
-
-            DOWNLOAD=''
-            for N in $(seq 1 120); do
-              PROG=/tmp/savenow-progress.json
-              PCODE=$(curl -sS -L --connect-timeout 10 --max-time 30 -o "$PROG" -w '%{http_code}' \
-                -A "$UA" \
-                -H 'Accept: application/json,*/*' \
-                -H 'Origin: https://en.loader.to' \
-                -H 'Referer: https://en.loader.to/' \
-                "https://p.savenow.to/api/progress?id=$ID" || true)
-              PROGRESS=$(jq -r '.progress // empty' "$PROG" 2>/dev/null || true)
-              DOWNLOAD=$(jq -r '.download_url // .download // empty' "$PROG" 2>/dev/null || true)
-              TEXT=$(jq -r '.text // .message // empty' "$PROG" 2>/dev/null || true)
-              if (( N == 1 || N % 10 == 0 )); then echo "poll=$N http=$PCODE progress=$PROGRESS text=$TEXT ready=$([[ -n "$DOWNLOAD" ]] && echo 1 || echo 0)" | tee -a out/savenow_attempts.txt; fi
-              if [[ -n "$DOWNLOAD" && "$PROGRESS" == "1000" ]]; then break; fi
-              if [[ -n "$DOWNLOAD" ]] && [[ "$(jq -r '.success // 0' "$PROG" 2>/dev/null || echo 0)" == "1" ]]; then break; fi
-              sleep 1.5
-            done
-            [[ -n "$DOWNLOAD" ]] || continue
-            echo "download_ready=1 format=$FORMAT" | tee -a out/savenow_attempts.txt
-
-            rm -f out/BUN1qw0yH6M.mp4
-            if curl -fL --retry 2 --retry-delay 1 --connect-timeout 10 --max-time 900 \
-                  -A "$UA" -H 'Referer: https://en.loader.to/' "$DOWNLOAD" -o out/BUN1qw0yH6M.mp4; then
-              cp "$INFO" out/savenow_info.json
-              cp /tmp/savenow-progress.json out/savenow_progress.json
+          CLIENTS=('default' 'web_embedded' 'tv_simply' 'visionos' 'ios' 'android_vr')
+          for CLIENT in "${CLIENTS[@]}"; do
+            echo "trying client=$CLIENT" | tee -a out/ytdlp_attempts.txt
+            rm -f out/BUN1qw0yH6M.* /tmp/ytdlp.log
+            set +e
+            yt-dlp -v \
+              --js-runtimes node \
+              --remote-components ejs:github \
+              --extractor-args "youtube:player_client=$CLIENT" \
+              --no-playlist \
+              --merge-output-format mp4 \
+              --remux-video mp4 \
+              -f 'bv*[height<=1080][vcodec^=avc1]+ba[ext=m4a]/b[height<=1080][ext=mp4]/b[height<=1080]/best' \
+              -o 'out/BUN1qw0yH6M.%(ext)s' \
+              "$URL" 2>&1 | tee /tmp/ytdlp.log
+            RC=${PIPESTATUS[0]}
+            set -e
+            echo "client=$CLIENT rc=$RC" | tee -a out/ytdlp_attempts.txt
+            tail -n 25 /tmp/ytdlp.log >> out/ytdlp_attempts.txt || true
+            FILE=$(find out -maxdepth 1 -type f -name 'BUN1qw0yH6M*.mp4' -size +100k | head -n1 || true)
+            if [[ "$RC" == "0" && -n "$FILE" ]]; then
+              mv "$FILE" out/BUN1qw0yH6M.mp4
+              echo "selected_client=$CLIENT" | tee -a out/ytdlp_attempts.txt
               SUCCESS=1
               break
             fi
