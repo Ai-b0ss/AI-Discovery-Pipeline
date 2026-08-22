@@ -13,37 +13,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Probe temporary download transports
+      - name: Probe Litterbox resumable transport
         shell: /usr/bin/dash {0}
         run: |
           set -eu
           dd if=/dev/zero of=sample.bin bs=1M count=5 status=none
-
-          check_range(){
-            name=$1; url=$2
-            rm -f headers.bin range.bin
-            curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 2 \
-              -r 100-199 -D headers.bin -o range.bin "$url"
-            test "$(wc -c < range.bin)" -eq 100
-            python3 - "$name" headers.bin <<'PY'
-          import re,sys
-          name=sys.argv[1]
-          s=open(sys.argv[2],'rb').read().decode('latin1','ignore')
-          if not re.search(r'(?im)^Content-Range:\s*bytes\s+100-199/\d+\s*$',s):
-              raise SystemExit(f'{name}: no valid Content-Range')
-          print(name+'_RANGE_OK')
-          PY
-          }
-
-          TEMP_URL=$(curl -fsS --connect-timeout 15 --max-time 90 --retry 2 --retry-delay 2 \
-            -F 'file=@sample.bin' https://temp.sh/upload | tr -d '\r\n')
-          test -n "$TEMP_URL"
-          echo "TEMP_SH_URL=$TEMP_URL"
-          check_range TEMP_SH "$TEMP_URL"
-
-          LITTER_URL=$(curl -fsS --connect-timeout 15 --max-time 90 --retry 2 --retry-delay 2 \
+          URL=$(curl -fsS --connect-timeout 15 --max-time 90 --retry 2 --retry-delay 2 \
             -F reqtype=fileupload -F time=1h -F 'fileToUpload=@sample.bin' \
             https://litterbox.catbox.moe/resources/internals/api.php | tr -d '\r\n')
-          test -n "$LITTER_URL"
-          echo "LITTERBOX_URL=$LITTER_URL"
-          check_range LITTERBOX "$LITTER_URL"
+          test -n "$URL"
+          echo "LITTERBOX_URL=$URL"
+          curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 2 \
+            -r 100-199 -D headers.bin -o range.bin "$URL"
+          test "$(wc -c < range.bin)" -eq 100
+          python3 - headers.bin <<'PY'
+          import re,sys
+          s=open(sys.argv[1],'rb').read().decode('latin1','ignore')
+          if not re.search(r'(?im)^Content-Range:\s*bytes\s+100-199/\d+\s*$',s):
+              raise SystemExit('LITTERBOX: no valid Content-Range')
+          print('LITTERBOX_RANGE_OK')
+          PY
