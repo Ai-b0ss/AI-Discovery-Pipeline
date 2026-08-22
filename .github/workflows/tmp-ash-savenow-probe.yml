@@ -1,0 +1,60 @@
+name: TEMP a-Shell SaveNow probe
+
+on:
+  pull_request:
+    paths:
+      - '.free-fabric/ash-probe/**'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Probe exact a-Shell network path
+        shell: dash
+        run: |
+          set -u
+          BASE='https://p.savenow.to'
+          VIDEO='https://www.youtube.com/watch?v=BUN1qw0yH6M'
+          UA='Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1'
+          jget(){ python3 -c 'import json,sys
+          try:
+           d=json.load(sys.stdin); v=d.get(sys.argv[1],"") if isinstance(d,dict) else ""
+           print(1 if v is True else (0 if v is False else v))
+          except Exception: pass' "$1"; }
+          INIT=$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 3 --retry-delay 2 -A "$UA" -H 'Accept: application/json,*/*' -H "Referer: $BASE/api/button/" --get "$BASE/api/v2/download" --data-urlencode 'button=1' --data-urlencode 'format=1080' --data-urlencode 'iframe_source=direct-iframe' --data-urlencode "url=$VIDEO")
+          ID=$(printf '%s' "$INIT" | jget id)
+          PURL=$(printf '%s' "$INIT" | jget progress_url)
+          test -n "$ID"
+          N=1; DOWNLOAD=''
+          while [ "$N" -le 240 ]; do
+            if [ "$N" -eq 1 ] && [ -n "$PURL" ]; then U=$PURL; else U="$BASE/api/progress?id=$ID"; fi
+            R=$(curl -fsSL --connect-timeout 15 --max-time 45 --retry 2 --retry-delay 2 -A "$UA" -H 'Accept: application/json,*/*' -H "Referer: $BASE/" "$U" 2>/dev/null || true)
+            DOWNLOAD=$(printf '%s' "$R" | jget download_url)
+            OK=$(printf '%s' "$R" | jget success)
+            if [ -n "$DOWNLOAD" ] && { [ "$OK" = 1 ] || [ -z "$OK" ]; }; then break; fi
+            sleep 2; N=$((N+1))
+          done
+          test -n "$DOWNLOAD"
+          curl -fsSL --connect-timeout 15 --max-time 60 --retry 3 --retry-delay 2 -A "$UA" -H "Referer: $BASE/" -r 0-0 -D h0 -o b0 "$DOWNLOAD"
+          TOTAL=$(python3 - h0 <<'PY'
+          import re,sys
+          s=open(sys.argv[1],'rb').read().decode('latin1','ignore')
+          m=re.findall(r'(?im)^Content-Range:\s*bytes\s+0-0/(\d+)\s*$',s)
+          if not m: raise SystemExit(1)
+          print(m[-1])
+          PY
+          )
+          test "$TOTAL" -gt 100000000
+          curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 --max-filesize 2097152 -A "$UA" -H "Referer: $BASE/" -r 0-1048575 -D h1 -o b1 "$DOWNLOAD"
+          test "$(wc -c < b1)" -eq 1048576
+          python3 - h1 <<'PY'
+          import re,sys
+          s=open(sys.argv[1],'rb').read().decode('latin1','ignore')
+          assert re.search(r'(?im)^Content-Range:\s*bytes\s+0-1048575/\d+\s*$',s)
+          PY
+          cmp -n 1 b0 b1
+          echo "REAL_PROBE_OK total=$TOTAL range=1048576"
