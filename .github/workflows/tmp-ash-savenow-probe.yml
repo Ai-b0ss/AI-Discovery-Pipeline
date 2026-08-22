@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Probe exact a-Shell network path
-        shell: dash
+        shell: /usr/bin/dash {0}
         run: |
           set -u
           BASE='https://p.savenow.to'
