@@ -22,31 +22,23 @@ jobs:
           VIDEO='https://www.youtube.com/watch?v=BUN1qw0yH6M'
           BASE='https://p.savenow.to'
 
-          INIT=$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 3 --retry-delay 2 \
-            -A "$UA" -H 'Accept: application/json,*/*' -H "Referer: $BASE/api/button/" \
-            --get "$BASE/api/v2/download" --data-urlencode 'button=1' \
-            --data-urlencode 'format=1080' --data-urlencode 'iframe_source=direct-iframe' \
-            --data-urlencode "url=$VIDEO")
-          ID=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("id", ""))' <<<"$INIT")
-          PURL=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("progress_url", ""))' <<<"$INIT")
+          INIT=$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 3 --retry-delay 2 -A "$UA" -H 'Accept: application/json,*/*' -H "Referer: $BASE/api/button/" --get "$BASE/api/v2/download" --data-urlencode 'button=1' --data-urlencode 'format=1080' --data-urlencode 'iframe_source=direct-iframe' --data-urlencode "url=$VIDEO")
+          ID=$(printf '%s' "$INIT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id", ""))')
+          PURL=$(printf '%s' "$INIT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("progress_url", ""))')
           test -n "$ID"
 
           DOWNLOAD=''
           for N in $(seq 1 300); do
             if [[ "$N" == 1 && -n "$PURL" ]]; then POLL="$PURL"; else POLL="$BASE/api/progress?id=$ID"; fi
-            R=$(curl -fsSL --connect-timeout 15 --max-time 45 --retry 2 --retry-delay 2 \
-              -A "$UA" -H 'Accept: application/json,*/*' -H "Referer: $BASE/" "$POLL" 2>/dev/null || true)
-            DOWNLOAD=$(python3 -c 'import json,sys
-try: print(json.load(sys.stdin).get("download_url", ""))
-except: print("")' <<<"$R")
+            R=$(curl -fsSL --connect-timeout 15 --max-time 45 --retry 2 --retry-delay 2 -A "$UA" -H 'Accept: application/json,*/*' -H "Referer: $BASE/" "$POLL" 2>/dev/null || true)
+            DOWNLOAD=$(printf '%s' "$R" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("download_url", ""))' 2>/dev/null || true)
             [[ -n "$DOWNLOAD" ]] && break
             sleep 2
           done
           test -n "$DOWNLOAD"
 
           echo 'Downloading 1080p source...'
-          curl -fL --retry 5 --retry-delay 3 --connect-timeout 15 --max-time 2400 \
-            -A "$UA" -H "Referer: $BASE/" "$DOWNLOAD" -o work/source.mp4
+          curl -fL --retry 5 --retry-delay 3 --connect-timeout 15 --max-time 2400 -A "$UA" -H "Referer: $BASE/" "$DOWNLOAD" -o work/source.mp4
 
           command -v ffmpeg >/dev/null
           command -v ffprobe >/dev/null
@@ -60,9 +52,7 @@ except: print("")' <<<"$R")
           test "$H" -ge 1080
 
           echo 'Cleaning MP4 without re-encoding...'
-          ffmpeg -hide_banner -loglevel error -y -i work/source.mp4 \
-            -map 0:v:0 -map 0:a:0 -map_chapters -1 -map_metadata -1 \
-            -c copy -movflags +faststart work/final.mp4
+          ffmpeg -hide_banner -loglevel error -y -i work/source.mp4 -map 0:v:0 -map 0:a:0 -map_chapters -1 -map_metadata -1 -c copy -movflags +faststart work/final.mp4
           rm -f work/source.mp4
 
           STREAMS=$(ffprobe -v error -show_entries stream=codec_type -of csv=p=0 work/final.mp4 | paste -sd, -)
@@ -84,23 +74,13 @@ except: print("")' <<<"$R")
             SIZE=$(stat -c %s "$F")
             SHA=$(sha256sum "$F" | awk '{print $1}')
             echo "Uploading part $IDX ($SIZE bytes)..."
-            URL=$(curl -fsS --connect-timeout 20 --max-time 900 --retry 4 --retry-delay 3 \
-              -F reqtype=fileupload -F time=72h -F "fileToUpload=@$F" \
-              https://litterbox.catbox.moe/resources/internals/api.php | tr -d '\r\n')
+            URL=$(curl -fsS --connect-timeout 20 --max-time 900 --retry 4 --retry-delay 3 -F reqtype=fileupload -F time=72h -F "fileToUpload=@$F" https://litterbox.catbox.moe/resources/internals/api.php | tr -d '\r\n')
             [[ "$URL" == https://litter.catbox.moe/* ]]
-
-            curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 2 \
-              -r 0-1023 -D work/range.h -o work/range.bin "$URL"
+            curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 2 -r 0-1023 -D work/range.h -o work/range.bin "$URL"
             test "$(stat -c %s work/range.bin)" -eq 1024
             cmp -n 1024 work/range.bin "$F"
-            TOTAL=$(python3 - work/range.h <<'PY'
-          import re,sys
-          s=open(sys.argv[1],'rb').read().decode('latin1','ignore')
-          m=re.findall(r'(?im)^Content-Range:\s*bytes\s+0-1023/(\d+)\s*$',s)
-          if not m: raise SystemExit(1)
-          print(m[-1])
-          PY
-            )
+            TOTAL=$(python3 -c 'import re,sys; s=open(sys.argv[1],"rb").read().decode("latin1","ignore"); m=re.findall(r"(?im)^Content-Range:\\s*bytes\\s+0-1023/(\\d+)\\s*$",s); print(m[-1] if m else "")' work/range.h)
+            test -n "$TOTAL"
             test "$TOTAL" -eq "$SIZE"
             printf 'PART=%02d SIZE=%s SHA256=%s URL=%s\n' "$IDX" "$SIZE" "$SHA" "$URL" >> work/manifest.txt
             IDX=$((IDX+1))
