@@ -31,20 +31,20 @@ fi
 say '2/4 Обновляю yt-dlp с официального GitHub...'
 TMP="$YTDLP.tmp"
 rm -f "$TMP"
-if ! curl -fL --connect-timeout 10 --max-time 120 --retry 3 --retry-delay 2 --progress-bar 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp' -o "$TMP"; then
+if ! curl -4 -fL --connect-timeout 8 --max-time 60 --retry 2 --retry-delay 2 --progress-bar 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp' -o "$TMP"; then
   rm -f "$TMP"
   fail 'не удалось скачать yt-dlp с GitHub.'
 fi
 python3 "$TMP" --version >/dev/null 2>&1 || { rm -f "$TMP"; fail 'скачанный yt-dlp не запускается.'; }
 mv "$TMP" "$YTDLP" || fail 'не удалось сохранить yt-dlp.'
 
-say '3/4 Проверяю YouTube и доступность iPhone-MP4...'
-if ! python3 "$YTDLP" --js-runtimes "quickjs:$QJS" --remote-components ejs:github --no-playlist -t mp4 --simulate --socket-timeout 15 --retries 2 "$VIDEO"; then
-  fail 'YouTube не отдал подходящий формат. Большая загрузка не начата.'
+say '3/4 Быстро проверяю YouTube по IPv4. Видео пока НЕ скачивается...'
+if ! python3 "$YTDLP" --force-ipv4 --js-runtimes "quickjs:$QJS" --remote-components ejs:github --no-playlist -t mp4 --simulate --socket-timeout 8 --extractor-retries 1 --retries 1 --retry-sleep extractor:1 "$VIDEO"; then
+  fail 'YouTube не ответил за короткий срок или не отдал подходящий формат. Большая загрузка НЕ начата.'
 fi
 
-say '4/4 Скачиваю. a-Shell лучше не сворачивать.'
-python3 "$YTDLP" --js-runtimes "quickjs:$QJS" --remote-components ejs:github --no-playlist -t mp4 --continue --retries infinite --fragment-retries infinite --retry-sleep 3 --concurrent-fragments 1 --newline --progress --socket-timeout 20 -o "$OUT" "$VIDEO" || fail 'yt-dlp завершился ошибкой.'
+say '4/4 Начинаю большую загрузку 1080p. a-Shell лучше не сворачивать.'
+python3 "$YTDLP" --force-ipv4 --js-runtimes "quickjs:$QJS" --remote-components ejs:github --no-playlist -t mp4 --continue --retries infinite --fragment-retries infinite --retry-sleep 3 --concurrent-fragments 1 --newline --progress --socket-timeout 15 -o "$OUT" "$VIDEO" || fail 'yt-dlp завершился ошибкой.'
 
 FINAL=$(ls -t BUN1qw0yH6M-1080p-iPhone12*.mp4 2>/dev/null | head -n 1)
 [ -n "${FINAL:-}" ] || fail 'итоговый MP4 не найден.'
