@@ -1,0 +1,57 @@
+<!doctype html><meta charset="utf-8"><title>MISIS XLS probe</title>
+<style>body{font:12px/1.25 ui-monospace,SFMono-Regular,Consolas,monospace;margin:12px;background:#fff;color:#111}pre{white-space:pre-wrap;word-break:break-word;margin:0}.err{color:#900}</style>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<pre id="out">LOADING…</pre>
+<script>
+(async()=>{
+ const out=document.getElementById('out'); const log=[]; const p=new URLSearchParams(location.search);
+ const target='https://misis.ru/files/-/504f0d5daceff524b3076082666fa485/itkn-260826.xls';
+ const enc=encodeURIComponent(target);
+ const proxies=[
+  ['corsproxy.io','https://corsproxy.io/?url='+enc],
+  ['allorigins','https://api.allorigins.win/raw?url='+enc]
+ ];
+ let buf=null, used='';
+ for(const [name,url] of proxies){
+  try{
+   log.push('FETCH '+name+' …'); out.textContent=log.join('\n');
+   const r=await fetch(url,{cache:'no-store'}); const b=await r.arrayBuffer();
+   const u=new Uint8Array(b); const head=Array.from(u.slice(0,16)).map(x=>x.toString(16).padStart(2,'0')).join('');
+   log.push(name+': HTTP '+r.status+', '+b.byteLength+' bytes, magic '+head);
+   if(r.ok && b.byteLength>1000 && !(u[0]===0x3c)){buf=b; used=name; break;}
+  }catch(e){log.push(name+': ERROR '+e);}
+ }
+ if(!buf) throw new Error('NO_BINARY_XLS');
+ const wb=XLSX.read(buf,{type:'array',cellDates:false});
+ log.push('PARSED via '+used); log.push('SHEETS '+wb.SheetNames.join(' | '));
+ function val(ws,r,c){
+  const a=XLSX.utils.encode_cell({r,c}); if(ws[a]&&ws[a].v!=null) return String(ws[a].v).replace(/\s+/g,' ').trim();
+  for(const m of (ws['!merges']||[])) if(r>=m.s.r&&r<=m.e.r&&c>=m.s.c&&c<=m.e.c){const z=ws[XLSX.utils.encode_cell(m.s)]; if(z&&z.v!=null)return String(z.v).replace(/\s+/g,' ').trim();}
+  return '';
+ }
+ const hits=[];
+ for(const sn of wb.SheetNames){const ws=wb.Sheets[sn]; if(!ws['!ref'])continue; const rg=XLSX.utils.decode_range(ws['!ref']);
+  for(let r=rg.s.r;r<=rg.e.r;r++)for(let c=rg.s.c;c<=rg.e.c;c++){const v=val(ws,r,c); if(/ББИ[\s\-–—]*26(?:[\s\-–—]*\d+)?/i.test(v)) hits.push({sn,r,c,v});}
+ }
+ const uniq=[]; const seen=new Set(); for(const h of hits){const k=h.sn+'|'+h.r+'|'+h.c+'|'+h.v;if(!seen.has(k)){seen.add(k);uniq.push(h)}}
+ log.push('HITS '+uniq.length); uniq.forEach((h,i)=>log.push(`${i}: ${h.sn}!${XLSX.utils.encode_cell({r:h.r,c:h.c})} = ${h.v}`));
+ const group=p.get('group');
+ let lines=[];
+ if(group){
+  const gh=uniq.filter(h=>h.v.toUpperCase().includes(group.toUpperCase()));
+  lines.push('GROUP '+group+' MATCHES '+gh.length);
+  for(const h of gh){const ws=wb.Sheets[h.sn], rg=XLSX.utils.decode_range(ws['!ref']); lines.push(`--- ${h.sn}!${XLSX.utils.encode_cell({r:h.r,c:h.c})} ${h.v} ---`);
+   for(let r=rg.s.r;r<=rg.e.r;r++){
+    const cols=[0,1,2,3,h.c-2,h.c-1,h.c,h.c+1,h.c+2].filter(c=>c>=rg.s.c&&c<=rg.e.c);
+    const cc=[...new Set(cols)]; const parts=[];
+    for(const c of cc){const v=val(ws,r,c); if(v)parts.push(XLSX.utils.encode_col(c)+'='+v)}
+    const near=[h.c-2,h.c-1,h.c,h.c+1,h.c+2].filter(c=>c>=0).some(c=>val(ws,r,c));
+    if(parts.length && near) lines.push('R'+(r+1)+' '+parts.join(' || '));
+   }
+  }
+ }else lines=log;
+ const page=Math.max(0,parseInt(p.get('page')||'0',10)||0), per=52, start=page*per, slice=lines.slice(start,start+per);
+ slice.push(`\nPAGE ${page} lines ${start+1}-${Math.min(start+per,lines.length)} / ${lines.length}`);
+ out.textContent=slice.join('\n');
+})().catch(e=>{document.getElementById('out').innerHTML='<span class="err">FAIL '+String(e&&e.stack||e)+'</span>'});
+</script>
