@@ -1,0 +1,15 @@
+<!doctype html><meta charset="utf-8"><title>MISIS XLS wait probe</title>
+<style>body{font:11px/1.22 ui-monospace,SFMono-Regular,Consolas,monospace;margin:10px;background:#fff;color:#111}pre{white-space:pre-wrap;word-break:break-word;margin:0}.err{color:#900}</style>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<pre id="out">LOADING…</pre>
+<script>
+(async()=>{const out=document.getElementById('out'),log=[];
+try{const target='https://misis.ru/files/-/504f0d5daceff524b3076082666fa485/itkn-260826.xls';const urls=[['allorigins','https://api.allorigins.win/raw?url='+encodeURIComponent(target)],['corsproxy','https://corsproxy.io/?url='+encodeURIComponent(target)]];let buf=null,used='';
+for(const [name,url] of urls){try{log.push('FETCH '+name+' …');out.textContent=log.join('\n');const r=await fetch(url,{cache:'no-store'}),b=await r.arrayBuffer(),u=new Uint8Array(b),magic=Array.from(u.slice(0,16)).map(v=>v.toString(16).padStart(2,'0')).join('');log.push(`${name}: HTTP ${r.status}, ${u.length} bytes, magic ${magic}`);if(r.ok&&u.length>1000&&u[0]!==0x3c){buf=b;used=name;break}}catch(e){log.push(name+': ERROR '+e)}}
+if(!buf)throw new Error('NO_BINARY_XLS\n'+log.join('\n'));const wb=XLSX.read(buf,{type:'array'});log.push('PARSED via '+used);log.push('SHEETS '+wb.SheetNames.join(' | '));const clean=v=>v==null?'':String(v).replace(/\s+/g,' ').trim();
+function val(ws,r,c){let q=ws[XLSX.utils.encode_cell({r,c})];if(q&&q.v!=null)return clean(q.v);for(const m of(ws['!merges']||[]))if(r>=m.s.r&&r<=m.e.r&&c>=m.s.c&&c<=m.e.c){q=ws[XLSX.utils.encode_cell(m.s)];if(q&&q.v!=null)return clean(q.v)}return''}
+const hits=[];for(const sn of wb.SheetNames){const ws=wb.Sheets[sn];if(!ws['!ref'])continue;const rg=XLSX.utils.decode_range(ws['!ref']);for(let r=rg.s.r;r<=rg.e.r;r++)for(let c=rg.s.c;c<=rg.e.c;c++){const v=val(ws,r,c);if(/ББИ[\s\-–—]*26(?:[\s\-–—]*\d+)?/i.test(v))hits.push({sn,r,c,v})}}
+const uniq=[],seen=new Set();for(const h of hits){const k=h.sn+'|'+h.r+'|'+h.c+'|'+h.v;if(!seen.has(k)){seen.add(k);uniq.push(h)}}log.push('HITS '+uniq.length);uniq.forEach((h,i)=>log.push(`${i}: ${h.sn}!${XLSX.utils.encode_cell({r:h.r,c:h.c})} = ${h.v}`));out.textContent=log.join('\n');
+}catch(e){out.innerHTML='<span class="err">FAIL\n'+String(e&&e.stack||e).replace(/</g,'&lt;')+'</span>'}})();
+</script>
+<img alt="wait" style="display:none" src="https://httpbin.org/delay/10?misis_wait=1">
