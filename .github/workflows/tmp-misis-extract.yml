@@ -1,0 +1,78 @@
+name: TEMP MISIS schedule extractor
+
+on:
+  workflow_dispatch:
+  issues:
+    types: [opened, reopened]
+  schedule:
+    - cron: '*/5 * * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Download and extract official ITKN schedule
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL='https://misis.ru/files/-/504f0d5daceff524b3076082666fa485/itkn-260826.xls'
+          curl --fail --location --retry 3 --connect-timeout 20 --max-time 120 \
+            -A 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140 Safari/537.36' \
+            "$URL" -o /tmp/itkn.xls
+          echo '=== DOWNLOAD ==='
+          file /tmp/itkn.xls
+          ls -l /tmp/itkn.xls
+          sha256sum /tmp/itkn.xls
+          python3 -m pip install -q --disable-pip-version-check xlrd==2.0.1
+          python3 - <<'PY'
+          import re, xlrd
+          p='/tmp/itkn.xls'
+          book=xlrd.open_workbook(p, formatting_info=True)
+          print('=== WORKBOOK ===')
+          print([(s.name,s.nrows,s.ncols) for s in book.sheets()])
+          pat=re.compile(r'ББИ\s*[-–—]?\s*26(?:\s*[-–—]?\s*\d+)?', re.I)
+          def t(v):
+              if v is None: return ''
+              if isinstance(v,float) and v.is_integer(): return str(int(v))
+              return str(v).replace('\r',' ').replace('\n',' / ').strip()
+          hits=[]
+          for si,sh in enumerate(book.sheets()):
+              for r in range(sh.nrows):
+                  for c in range(sh.ncols):
+                      s=t(sh.cell_value(r,c))
+                      if pat.search(s): hits.append((si,r,c,s))
+          print('=== BBI26 MATCHES ===')
+          print('COUNT',len(hits))
+          for si,r,c,s in hits:
+              print(f'{book.sheet_by_index(si).name}!R{r+1}C{c+1}: {s}')
+          if not hits:
+              print('=== ALL BBI CELLS ===')
+              for sh in book.sheets():
+                  for r in range(sh.nrows):
+                      for c in range(sh.ncols):
+                          s=t(sh.cell_value(r,c))
+                          if 'ББИ' in s.upper(): print(f'{sh.name}!R{r+1}C{c+1}: {s}')
+              raise SystemExit(2)
+          # Print broad rectangles around every hit. Excel schedules often use merged
+          # group headers and day/time labels far to the left, so retain enough context.
+          seen=set()
+          print('=== CONTEXT ===')
+          for i,(si,hr,hc,hs) in enumerate(hits,1):
+              sh=book.sheet_by_index(si)
+              key=(si,hr,hc)
+              if key in seen: continue
+              seen.add(key)
+              print(f'--- HIT {i} {sh.name}!R{hr+1}C{hc+1} {hs!r} ---')
+              r0=max(0,hr-18); r1=min(sh.nrows,hr+90)
+              c0=max(0,hc-12); c1=min(sh.ncols,hc+13)
+              for r in range(r0,r1):
+                  vals=[]
+                  for c in range(c0,c1):
+                      s=t(sh.cell_value(r,c))
+                      if s: vals.append(f'C{c+1}={s}')
+                  if vals: print(f'R{r+1}: '+' || '.join(vals))
+          PY
