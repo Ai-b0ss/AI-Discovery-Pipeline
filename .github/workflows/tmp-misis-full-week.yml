@@ -1,0 +1,90 @@
+name: TEMP MISIS full-week extractor
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Extract complete BBI-26 schedule
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL='https://misis.ru/files/-/504f0d5daceff524b3076082666fa485/itkn-260826.xls'
+          curl --fail --location --retry 3 --connect-timeout 20 --max-time 120 \
+            -A 'Mozilla/5.0 Chrome/140 Safari/537.36' "$URL" -o /tmp/itkn.xls
+          python3 -m pip install -q --disable-pip-version-check xlrd==2.0.1
+          python3 - <<'PY'
+          import re, xlrd
+          book=xlrd.open_workbook('/tmp/itkn.xls', formatting_info=True)
+          sh=book.sheet_by_name('1 курс')
+
+          def txt(r,c):
+              v=sh.cell_value(r,c)
+              if v is None: return ''
+              if isinstance(v,float) and v.is_integer(): return str(int(v))
+              return str(v).replace('\r',' ').replace('\n',' / ').strip()
+
+          groups=[]
+          for c in range(sh.ncols):
+              s=txt(0,c)
+              if re.fullmatch(r'ББИ-26-6-[1-7]',s): groups.append((s,c))
+          assert len(groups)==7, groups
+
+          days=[('Пн',2),('Вт',16),('Ср',30),('Чт',44),('Пт',58),('Сб',72),('Вс',86)]
+          starts=['09:00','10:50','12:40','14:30','16:20','18:00','19:35']
+          # Standard MISIS pair length in this sheet is 90 minutes. Print source left columns too.
+          print('=== LEFT_TIME_COLUMNS ===')
+          for r in range(0,16):
+              vals=[f'C{c+1}={txt(r,c)}' for c in range(3) if txt(r,c)]
+              if vals: print(f'R{r+1}: '+' || '.join(vals))
+
+          def slot_entries(base,row):
+              out=[]
+              for cc in (base,base+2):
+                  s=txt(row,cc)
+                  if s:
+                      room=txt(row,cc+1)
+                      item=s + (f' @ {room}' if room else '')
+                      if item not in out: out.append(item)
+              return out
+
+          print('=== FULL_WEEK_COMPACT ===')
+          for g,base in groups:
+              print(f'### {g}')
+              for label,off in [('A',0),('B',1)]:
+                  print(f'-- WEEK {label} --')
+                  for day,start in days:
+                      occupied=[]
+                      for p,st in enumerate(starts):
+                          row=start+2*p+off
+                          es=slot_entries(base,row)
+                          if es: occupied.append((p,st,es))
+                      if not occupied:
+                          print(f'{day}: FREE')
+                          continue
+                      first=occupied[0][1]; last=occupied[-1][1]
+                      gaps=[]
+                      inds=[x[0] for x in occupied]
+                      for a,b in zip(inds,inds[1:]):
+                          if b-a>1: gaps.extend(starts[a+1:b])
+                      print(f'{day}: START={first}; LAST_START={last}; PAIRS={len(occupied)}; GAPS={",".join(gaps) if gaps else "none"}')
+                      for _,st,es in occupied:
+                          print(f'  {st} :: '+' || '.join(es))
+
+          print('=== SPORT_ONLY ===')
+          for g,base in groups:
+              for label,off in [('A',0),('B',1)]:
+                  for day,start in days:
+                      for p,st in enumerate(starts):
+                          es=slot_entries(base,start+2*p+off)
+                          for e in es:
+                              if 'Физическ' in e or 'спорт' in e.lower():
+                                  print(g,label,day,st,'::',e)
+          PY
