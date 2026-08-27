@@ -2,6 +2,8 @@ name: TEMP MISIS schedule extractor
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
   issues:
     types: [opened, reopened]
   schedule:
@@ -57,10 +59,8 @@ jobs:
                           s=t(sh.cell_value(r,c))
                           if 'ББИ' in s.upper(): print(f'{sh.name}!R{r+1}C{c+1}: {s}')
               raise SystemExit(2)
-          # Print broad rectangles around every hit. Excel schedules often use merged
-          # group headers and day/time labels far to the left, so retain enough context.
-          seen=set()
           print('=== CONTEXT ===')
+          seen=set()
           for i,(si,hr,hc,hs) in enumerate(hits,1):
               sh=book.sheet_by_index(si)
               key=(si,hr,hc)
