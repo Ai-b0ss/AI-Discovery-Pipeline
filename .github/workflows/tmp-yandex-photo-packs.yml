@@ -65,12 +65,12 @@ jobs:
           print('TOTAL_FILES',len(files),'TOTAL_BYTES',sum(x['size'] for x in files),'TOTAL_GROUPS',len(groups))
           for x in selected: print('GROUP',x['group'],'FILES',len(x['files']),'RAW_BYTES',x['raw_bytes'],x['name'])
           PY
-      - name: Delete previous temporary photo pack artifacts
+      - name: Delete previous temporary ALL photo pack artifacts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" \
-            --jq '.artifacts[] | select(.name | startswith("june30_")) | .id' \
+            --jq '.artifacts[] | select(.name | startswith("june30_all_")) | .id' \
           | while read -r id; do [ -n "$id" ] && gh api -X DELETE "/repos/$GITHUB_REPOSITORY/actions/artifacts/$id"; done
 
   pack:
