@@ -12,80 +12,27 @@ permissions:
   actions: write
 
 jobs:
-  chunk:
+  raw-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-
-      - name: Delete previous temporary chunks
+      - name: Delete previous raw bridge artifacts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" \
-            --jq '.artifacts[] | select(.name == "yandex-part") | .id' \
+            --jq '.artifacts[] | select(.name == "bridge-test.txt") | .id' \
           | while read -r id; do
               [ -n "$id" ] && gh api -X DELETE "/repos/$GITHUB_REPOSITORY/actions/artifacts/$id"
             done
-
-      - name: Download and verify exact Yandex byte range
-        env:
-          PUBLIC_KEY: https://disk.yandex.ru/d/GedxLT7sVZldWw
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import hashlib, json, os, time, urllib.parse, urllib.request
-
-          c=json.load(open('tmp-yandex-control.json',encoding='utf-8'))
-          start=int(c['start']); end=int(c['end']); expected=end-start+1
-          api='https://cloud-api.yandex.net/v1/disk/public/resources/download?'+urllib.parse.urlencode({
-              'public_key':os.environ['PUBLIC_KEY'], 'path':c['path']})
-          req=urllib.request.Request(api,headers={'User-Agent':'Mozilla/5.0'})
-          with urllib.request.urlopen(req,timeout=60) as r:
-              href=json.load(r)['href']
-
-          last=None
-          for attempt in range(5):
-              try:
-                  req=urllib.request.Request(href,headers={
-                      'User-Agent':'Mozilla/5.0',
-                      'Range':f'bytes={start}-{end}',
-                      'Accept-Encoding':'identity',
-                  })
-                  h=hashlib.sha256(); n=0
-                  with urllib.request.urlopen(req,timeout=180) as r, open('part.bin','wb') as f:
-                      status=getattr(r,'status',None)
-                      content_range=r.headers.get('Content-Range')
-                      while True:
-                          b=r.read(8*1024*1024)
-                          if not b: break
-                          f.write(b); h.update(b); n+=len(b)
-                  if n != expected:
-                      raise RuntimeError(f'range size mismatch: expected={expected} actual={n} status={status} content-range={content_range!r}')
-                  manifest={
-                      'path':c['path'],'key':c['key'],'part':int(c['part']),
-                      'start':start,'end':end,'size':n,'sha256':h.hexdigest(),
-                      'http_status':status,'content_range':content_range,
-                  }
-                  json.dump(manifest,open('part-manifest.json','w'),ensure_ascii=False,indent=2)
-                  print(json.dumps(manifest,ensure_ascii=False))
-                  break
-              except Exception as e:
-                  last=e
-                  try: os.remove('part.bin')
-                  except FileNotFoundError: pass
-                  if attempt == 4: raise
-                  time.sleep(min(16,2**attempt))
-          PY
-
-      - name: Upload temporary chunk
-        uses: actions/upload-artifact@v4
+      - name: Create exact test file
+        run: printf 'RAW-BRIDGE-TEST-123\n' > bridge-test.txt
+      - name: Upload without archive
+        uses: actions/upload-artifact@v7
         with:
-          name: yandex-part
-          path: |
-            part.bin
-            part-manifest.json
-          compression-level: 0
+          path: bridge-test.txt
+          archive: false
           retention-days: 1
           if-no-files-found: error
