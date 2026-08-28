@@ -4,21 +4,88 @@ on:
   push:
     branches:
       - tmp/yandex-drive-transfer-20260828
+    paths:
+      - tmp-yandex-control.json
 
 permissions:
-  contents: write
+  contents: read
+  actions: write
 
 jobs:
-  release-test:
+  chunk:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
-      - name: Create tiny release asset
+      - uses: actions/checkout@v4
+
+      - name: Delete previous temporary chunks
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: tmp-yandex-transfer-test-20260828
         run: |
           set -euo pipefail
-          printf 'release-bridge-test\n' > bridge-test.txt
-          gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
-          gh release create "$TAG" bridge-test.txt --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Temporary Yandex transfer test" --notes "Temporary; will be deleted."
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.name | startswith("yandex-part-")) | .id' \
+          | while read -r id; do
+              [ -n "$id" ] && gh api -X DELETE "/repos/$GITHUB_REPOSITORY/actions/artifacts/$id"
+            done
+
+      - name: Download exact byte range from Yandex
+        env:
+          PUBLIC_KEY: https://disk.yandex.ru/d/GedxLT7sVZldWw
+        run: |
+          set -euo pipefail
+          python - <<'PY' > /tmp/chunk.env
+          import json, os, urllib.parse, urllib.request
+          c=json.load(open('tmp-yandex-control.json',encoding='utf-8'))
+          api='https://cloud-api.yandex.net/v1/disk/public/resources/download?'+urllib.parse.urlencode({'public_key':os.environ['PUBLIC_KEY'],'path':c['path']})
+          req=urllib.request.Request(api,headers={'User-Agent':'Mozilla/5.0'})
+          with urllib.request.urlopen(req,timeout=60) as r:
+              href=json.load(r)['href']
+          print('PATH_JSON='+json.dumps(c['path'],ensure_ascii=True))
+          print('KEY='+c['key'])
+          print('PART='+str(c['part']))
+          print('START='+str(c['start']))
+          print('END='+str(c['end']))
+          print('EXPECTED='+str(c['end']-c['start']+1))
+          print('HREF='+href)
+          PY
+          set -a
+          . /tmp/chunk.env
+          set +a
+          curl --fail --location --retry 5 --retry-all-errors --retry-delay 2 \
+            --range "${START}-${END}" "$HREF" -o part.bin
+          actual=$(stat -c%s part.bin)
+          if [ "$actual" -ne "$EXPECTED" ]; then
+            echo "range size mismatch: expected=$EXPECTED actual=$actual" >&2
+            exit 22
+          fi
+          sha=$(sha256sum part.bin | awk '{print $1}')
+          python - <<'PY'
+          import json, os
+          d={
+            'path': json.loads(os.environ['PATH_JSON']),
+            'key': os.environ['KEY'],
+            'part': int(os.environ['PART']),
+            'start': int(os.environ['START']),
+            'end': int(os.environ['END']),
+            'size': int(os.environ['EXPECTED']),
+          }
+          import hashlib
+          h=hashlib.sha256()
+          with open('part.bin','rb') as f:
+              for b in iter(lambda:f.read(8*1024*1024),b''): h.update(b)
+          d['sha256']=h.hexdigest()
+          json.dump(d,open('part-manifest.json','w'),ensure_ascii=False,indent=2)
+          print(json.dumps(d,ensure_ascii=False))
+          PY
+
+      - name: Upload temporary chunk
+        uses: actions/upload-artifact@v4
+        with:
+          name: yandex-part
+          path: |
+            part.bin
+            part-manifest.json
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
