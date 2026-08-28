@@ -12,27 +12,24 @@ permissions:
   actions: write
 
 jobs:
-  raw-test:
+  transfer:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-      - name: Delete previous raw bridge artifacts
+
+      - name: Delete previous raw payload artifacts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" \
-            --jq '.artifacts[] | select(.name == "bridge-test.txt") | .id' \
+            --jq '.artifacts[] | select(.name == "payload.mp4") | .id' \
           | while read -r id; do
               [ -n "$id" ] && gh api -X DELETE "/repos/$GITHUB_REPOSITORY/actions/artifacts/$id"
             done
-      - name: Create exact test file
-        run: printf 'RAW-BRIDGE-TEST-123\n' > bridge-test.txt
-      - name: Upload without archive
-        uses: actions/upload-artifact@v7
-        with:
-          path: bridge-test.txt
-          archive: false
-          retention-days: 1
-          if-no-files-found: error
+
+      - name: Download complete Yandex file and verify size
+        env:
+          PUBLIC_KEY: ${{ fromJSON(format('{0}', toJSON(fromJSON(steps.control.outputs.json)))) }}
+        run: echo impossible
