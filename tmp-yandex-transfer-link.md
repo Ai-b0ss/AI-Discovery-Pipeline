@@ -1,5 +1,3 @@
 Temporary transfer helper. Delete after use.
 
-[Yandex public folder download API](https://cloud-api.yandex.net/v1/disk/public/resources/download?public_key=https%3A%2F%2Fdisk.yandex.ru%2Fd%2FGedxLT7sVZldWw&path=%2F)
-
-[Yandex public folder metadata API](https://cloud-api.yandex.net/v1/disk/public/resources?public_key=https%3A%2F%2Fdisk.yandex.ru%2Fd%2FGedxLT7sVZldWw&path=%2F)
+[grad_clip](https://downloader.disk.yandex.ru/disk/3c2d09ff564295194117da18ba98b4b9a12d8960312a9ebca1b5cc16766bdbc6/6a91f85d/2mdPuZ8igU6ffzsyxcl6Nxp6zF2JhIHCmVv71Xo_UDMLFid4k7lVpqLcIFUJB_5nUDTXWl_CkjACleRp1qTmdg%3D%3D?uid=0&filename=%D0%B2%D1%8B%D0%BF%D1%83%D1%81%D0%BA%D0%BD%D0%BE%D0%B8%CC%86%20%D0%BA%D0%BB%D0%B8%D0%BF.mp4&disposition=attachment&hash=vBX9rG2cN84ZGj4AtF9W%2BrH/f0aivRSAvRuF3Ai8Lvnkh860yQbdVP2tAydNkYBoq/J6bpmRyOJonT3VoXnDag%3D%3D%3A/%D0%92%D1%8B%D0%BF%D1%83%D1%81%D0%BA%D0%BD%D0%BE%D0%B9%20%D0%B3%D0%BE%D1%82%D0%BE%D0%B2%D0%BE%D0%B5/%D0%B2%D1%8B%D0%BF%D1%83%D1%81%D0%BA%D0%BD%D0%BE%D0%B8%CC%86%20%D0%BA%D0%BB%D0%B8%D0%BF.mp4&limit=0&content_type=video%2Fmp4&owner_uid=226578622&fsize=1241060815&hid=78ec44c996c52dba669750308f1cf096&media_type=video&tknv=v3&is_direct_zip_experiment=1)
