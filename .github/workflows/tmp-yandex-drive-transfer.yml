@@ -12,114 +12,105 @@ permissions:
   actions: write
 
 jobs:
-  transfer:
+  plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Delete previous raw payload artifacts
+      - id: plan
+        name: Build exact byte-range plan
+        run: |
+          python - <<'PY'
+          import json, math, os
+          c=json.load(open('tmp-yandex-control.json',encoding='utf-8'))
+          total=int(c['expected_size'])
+          chunk=int(c.get('chunk_size',500_000_000))
+          if chunk <= 0 or chunk > 520_000_000:
+              raise SystemExit('chunk_size must be in 1..520000000')
+          parts=[]
+          n=math.ceil(total/chunk)
+          for i in range(n):
+              start=i*chunk
+              end=min(total-1,(i+1)*chunk-1)
+              parts.append({
+                  'part':i+1,
+                  'start':start,
+                  'end':end,
+                  'size':end-start+1,
+                  'name':f"payload.part{i+1:03d}",
+              })
+          matrix=json.dumps({'include':parts},separators=(',',':'))
+          with open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8') as f:
+              f.write('matrix='+matrix+'\n')
+          print(json.dumps(parts,indent=2))
+          PY
+      - name: Delete obsolete temporary payload artifacts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" \
-            --jq '.artifacts[] | select(.name == "payload.mp4") | .id' \
+            --jq '.artifacts[] | select(.name == "payload.mp4" or (.name | startswith("payload.part"))) | .id' \
           | while read -r id; do
               [ -n "$id" ] && gh api -X DELETE "/repos/$GITHUB_REPOSITORY/actions/artifacts/$id"
             done
 
-      - name: Download complete file with resume and verify
+  part:
+    needs: plan
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download exact source byte range
+        env:
+          PART_START: ${{ matrix.start }}
+          PART_END: ${{ matrix.end }}
+          PART_SIZE: ${{ matrix.size }}
+          PART_NAME: ${{ matrix.name }}
         run: |
           set -euo pipefail
           python - <<'PY'
-          import hashlib, json, os, subprocess, time, urllib.parse, urllib.request
-
-          c = json.load(open('tmp-yandex-control.json', encoding='utf-8'))
-          public_key = c['public_key']
-          path = c['path']
-          expected = int(c['expected_size'])
-          out = 'payload.mp4'
-
-          def signed_url():
-              api = 'https://cloud-api.yandex.net/v1/disk/public/resources/download?' + urllib.parse.urlencode({
-                  'public_key': public_key,
-                  'path': path,
-              })
-              req = urllib.request.Request(api, headers={'User-Agent': 'Mozilla/5.0'})
-              with urllib.request.urlopen(req, timeout=60) as r:
-                  return json.load(r)['href']
-
-          for attempt in range(10):
-              current = os.path.getsize(out) if os.path.exists(out) else 0
-              if current == expected:
-                  break
-              if current > expected:
-                  raise RuntimeError(f'local file exceeded expected size: {current} > {expected}')
-              href = signed_url()
-              cmd = [
-                  'curl', '--fail', '--location', '--retry', '5', '--retry-all-errors',
-                  '--retry-delay', '2', '--connect-timeout', '30', '--speed-time', '120', '--speed-limit', '1024',
-                  '-H', 'Accept-Encoding: identity',
-              ]
-              if current:
-                  cmd += ['--range', f'{current}-', '--output', 'resume.bin', href]
-              else:
-                  cmd += ['--output', out, href]
+          import hashlib, json, os, time, urllib.parse, urllib.request
+          c=json.load(open('tmp-yandex-control.json',encoding='utf-8'))
+          start=int(os.environ['PART_START']); end=int(os.environ['PART_END']); expected=int(os.environ['PART_SIZE'])
+          name=os.environ['PART_NAME']
+          api='https://cloud-api.yandex.net/v1/disk/public/resources/download?'+urllib.parse.urlencode({
+              'public_key':c['public_key'],'path':c['path']})
+          last=None
+          for attempt in range(6):
               try:
-                  subprocess.run(cmd, check=True)
-                  if current:
-                      with open(out, 'ab') as dst, open('resume.bin', 'rb') as src:
-                          while True:
-                              b = src.read(16 * 1024 * 1024)
-                              if not b:
-                                  break
-                              dst.write(b)
-                      os.remove('resume.bin')
-              except subprocess.CalledProcessError:
-                  try:
-                      os.remove('resume.bin')
-                  except FileNotFoundError:
-                      pass
-                  if attempt == 9:
-                      raise
-                  time.sleep(min(30, 2 ** attempt))
-
-          actual = os.path.getsize(out)
-          if actual != expected:
-              raise RuntimeError(f'final size mismatch: expected={expected}, actual={actual}')
-
-          h = hashlib.sha256()
-          with open(out, 'rb') as f:
-              for b in iter(lambda: f.read(16 * 1024 * 1024), b''):
-                  h.update(b)
-          digest = h.hexdigest()
-          print(f'EXPECTED_SIZE={expected}')
-          print(f'ACTUAL_SIZE={actual}')
-          print(f'SHA256={digest}')
-          print(f'SOURCE_PATH={path}')
+                  req=urllib.request.Request(api,headers={'User-Agent':'Mozilla/5.0'})
+                  with urllib.request.urlopen(req,timeout=60) as r:
+                      href=json.load(r)['href']
+                  req=urllib.request.Request(href,headers={
+                      'User-Agent':'Mozilla/5.0','Range':f'bytes={start}-{end}','Accept-Encoding':'identity'})
+                  h=hashlib.sha256(); n=0
+                  with urllib.request.urlopen(req,timeout=300) as r, open(name,'wb') as f:
+                      status=getattr(r,'status',None); cr=r.headers.get('Content-Range')
+                      while True:
+                          b=r.read(8*1024*1024)
+                          if not b: break
+                          f.write(b); h.update(b); n+=len(b)
+                  if n != expected:
+                      raise RuntimeError(f'bad range size expected={expected} actual={n} status={status} content-range={cr!r}')
+                  print(f'PART_OK name={name} start={start} end={end} bytes={n} sha256={h.hexdigest()}')
+                  break
+              except Exception as e:
+                  last=e
+                  try: os.remove(name)
+                  except FileNotFoundError: pass
+                  if attempt==5: raise
+                  time.sleep(min(30,2**attempt))
           PY
-
-      - name: Validate MP4 header and box structure
-        run: |
-          python - <<'PY'
-          import os, struct
-          p='payload.mp4'
-          size=os.path.getsize(p)
-          with open(p,'rb') as f:
-              head=f.read(1024*1024)
-          if len(head) < 16 or head[4:8] != b'ftyp':
-              raise SystemExit('invalid MP4: ftyp box not found at expected position')
-          major=head[8:12].decode('ascii','replace')
-          if b'mdat' not in head and b'moov' not in head and size < 1024*1024:
-              raise SystemExit('invalid MP4: no media/container boxes visible')
-          print(f'MP4_HEADER_OK major_brand={major} size={size}')
-          PY
-
-      - name: Upload source bytes without ZIP
+      - name: Upload raw volume without ZIP
         uses: actions/upload-artifact@v7
         with:
-          path: payload.mp4
+          path: ${{ matrix.name }}
           archive: false
           retention-days: 1
           if-no-files-found: error
