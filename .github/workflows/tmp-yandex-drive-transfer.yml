@@ -14,7 +14,7 @@ permissions:
 jobs:
   transfer:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
 
@@ -29,7 +29,86 @@ jobs:
               [ -n "$id" ] && gh api -X DELETE "/repos/$GITHUB_REPOSITORY/actions/artifacts/$id"
             done
 
-      - name: Download complete Yandex file and verify size
-        env:
-          PUBLIC_KEY: ${{ fromJSON(format('{0}', toJSON(fromJSON(steps.control.outputs.json)))) }}
-        run: echo impossible
+      - name: Download complete file with resume and verify
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, subprocess, time, urllib.parse, urllib.request
+
+          c = json.load(open('tmp-yandex-control.json', encoding='utf-8'))
+          public_key = c['public_key']
+          path = c['path']
+          expected = int(c['expected_size'])
+          out = 'payload.mp4'
+
+          def signed_url():
+              api = 'https://cloud-api.yandex.net/v1/disk/public/resources/download?' + urllib.parse.urlencode({
+                  'public_key': public_key,
+                  'path': path,
+              })
+              req = urllib.request.Request(api, headers={'User-Agent': 'Mozilla/5.0'})
+              with urllib.request.urlopen(req, timeout=60) as r:
+                  return json.load(r)['href']
+
+          for attempt in range(10):
+              current = os.path.getsize(out) if os.path.exists(out) else 0
+              if current == expected:
+                  break
+              if current > expected:
+                  raise RuntimeError(f'local file exceeded expected size: {current} > {expected}')
+              href = signed_url()
+              cmd = [
+                  'curl', '--fail', '--location', '--retry', '5', '--retry-all-errors',
+                  '--retry-delay', '2', '--connect-timeout', '30', '--speed-time', '120', '--speed-limit', '1024',
+                  '-H', 'Accept-Encoding: identity',
+              ]
+              if current:
+                  cmd += ['--range', f'{current}-', '--output', 'resume.bin', href]
+              else:
+                  cmd += ['--output', out, href]
+              try:
+                  subprocess.run(cmd, check=True)
+                  if current:
+                      with open(out, 'ab') as dst, open('resume.bin', 'rb') as src:
+                          while True:
+                              b = src.read(16 * 1024 * 1024)
+                              if not b:
+                                  break
+                              dst.write(b)
+                      os.remove('resume.bin')
+              except subprocess.CalledProcessError:
+                  try:
+                      os.remove('resume.bin')
+                  except FileNotFoundError:
+                      pass
+                  if attempt == 9:
+                      raise
+                  time.sleep(min(30, 2 ** attempt))
+
+          actual = os.path.getsize(out)
+          if actual != expected:
+              raise RuntimeError(f'final size mismatch: expected={expected}, actual={actual}')
+
+          h = hashlib.sha256()
+          with open(out, 'rb') as f:
+              for b in iter(lambda: f.read(16 * 1024 * 1024), b''):
+                  h.update(b)
+          digest = h.hexdigest()
+          print(f'EXPECTED_SIZE={expected}')
+          print(f'ACTUAL_SIZE={actual}')
+          print(f'SHA256={digest}')
+          print(f'SOURCE_PATH={path}')
+          PY
+
+      - name: Validate MP4 container
+        run: |
+          set -euo pipefail
+          ffprobe -v error -show_entries format=duration,size,format_name -of json payload.mp4
+
+      - name: Upload source bytes without ZIP
+        uses: actions/upload-artifact@v7
+        with:
+          path: payload.mp4
+          archive: false
+          retention-days: 1
+          if-no-files-found: error
