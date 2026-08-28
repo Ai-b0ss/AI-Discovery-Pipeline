@@ -11,39 +11,40 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Parse row headers and BBI-26-6-4
+      - name: Inspect MISIS week legend
         shell: bash
         run: |
           set -euo pipefail
           python3 -m pip install -q xlrd==2.0.1
           python3 - <<'PY'
-          import urllib.request,hashlib,xlrd
+          import urllib.request,re,xlrd
           from pathlib import Path
-          url='https://misis.ru/files/-/504f0d5daceff524b3076082666fa485/itkn-260826.xls'
-          req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0 Chrome/146 Safari/537.36','Referer':'https://misis.ru/students/','Accept':'application/vnd.ms-excel,*/*'})
-          with urllib.request.urlopen(req,timeout=90) as r:data=r.read()
-          print('BYTES',len(data),'SHA256',hashlib.sha256(data).hexdigest())
+          u='https://misis.ru/files/-/504f0d5daceff524b3076082666fa485/itkn-260826.xls'
+          q=urllib.request.Request(u,headers={'User-Agent':'Mozilla/5.0 Chrome/146 Safari/537.36','Referer':'https://misis.ru/students/','Accept':'application/vnd.ms-excel,*/*'})
+          with urllib.request.urlopen(q,timeout=90) as r:data=r.read()
           p=Path('/tmp/x.xls');p.write_bytes(data)
-          b=xlrd.open_workbook(str(p),formatting_info=True);s=b.sheet_by_name('1 курс')
-          def t(r,c):
-            v=s.cell_value(r,c)
-            if isinstance(v,float) and v.is_integer():v=int(v)
-            return str(v).replace('\r',' / ').replace('\n',' / ').strip() if v!='' else ''
-          print('=== MERGES TOUCHING HEADER OR TARGET ===')
-          for m in s.merged_cells:
-            if m[2] < 5 or (m[2] <= 18 and m[3] > 15): print(m)
-          print('=== ROW MAP C1:C5 + C16:C19 ===')
-          for r in range(s.nrows):
-            vals=[]
-            for c in list(range(0,5))+list(range(15,19)):
-              x=t(r,c)
-              if x: vals.append(f'C{c+1}={x}')
-            if vals: print(f'R{r+1}: '+' || '.join(vals))
-          print('=== STYLES/FILLS TARGET ROWS ===')
-          for r in range(s.nrows):
-            vals=[]
-            for c in range(15,19):
-              x=t(r,c)
-              if x: vals.append(f'C{c+1}[xf={s.cell_xf_index(r,c)}]={x}')
-            if vals: print(f'R{r+1}: '+' || '.join(vals))
+          b=xlrd.open_workbook(str(p),formatting_info=True)
+          rx=re.compile(r'(неч|ч[её]т|недел|числ|знам|верх|ниж|первая|вторая|1\s*нед|2\s*нед)',re.I)
+          print('=== LEGEND TERMS IN ALL CELLS ===')
+          n=0
+          for sh in b.sheets():
+            for r in range(sh.nrows):
+              for c in range(sh.ncols):
+                v=str(sh.cell_value(r,c)).replace('\r',' ').replace('\n',' ').strip()
+                if v and rx.search(v):
+                  print(f'{sh.name}!R{r+1}C{c+1}: {v!r}');n+=1
+          print('LEGEND_HITS',n)
+          print('=== DEFINED NAMES ===')
+          try:
+            for k,v in b.name_map.items(): print(k,[(x.name,x.scope,x.result) for x in v])
+          except Exception as e: print('names_err',repr(e))
+          print('=== HIDDEN ROW/COL INFO 1 курс ===')
+          s=b.sheet_by_name('1 курс')
+          for r,ri in sorted(s.rowinfo_map.items()):
+            if getattr(ri,'hidden',0): print('hidden_row',r+1)
+          for c,ci in sorted(s.colinfo_map.items()):
+            if getattr(ci,'hidden',0): print('hidden_col',c+1)
+          print('=== ROW HEIGHTS FIRST DAY ===')
+          for r in range(2,16):
+            ri=s.rowinfo_map.get(r); print(r+1, getattr(ri,'height',None),getattr(ri,'hidden',None))
           PY
