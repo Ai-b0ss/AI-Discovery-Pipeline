@@ -28,13 +28,23 @@ jobs:
             -H 'Turbo-Frame: modal' -H 'Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml' \
             "$BASE$PROJECT/downloads/project" -o download-project.html
           TOKEN=$(python - <<'PY'
-          from bs4 import BeautifulSoup
-          s=BeautifulSoup(open('download-project.html',encoding='utf-8'),'html.parser')
-          f=next(f for f in s.find_all('form') if f.find('button',attrs={'name':'storage','value':'local'}))
-          print(f.find('input',attrs={'name':'authenticity_token'})['value'])
+          import re, html
+          s=open('download-project.html',encoding='utf-8',errors='replace').read()
+          forms=re.findall(r'<form\b[^>]*>.*?</form>',s,re.I|re.S)
+          local=next((f for f in forms if re.search(r'<button\b[^>]*name=["\']storage["\'][^>]*value=["\']local["\']',f,re.I)),None)
+          if not local:
+              raise SystemExit('local-download form not found')
+          m=re.search(r'<input\b[^>]*name=["\']authenticity_token["\'][^>]*value=["\']([^"\']+)',local,re.I)
+          if not m:
+              m=re.search(r'<input\b[^>]*value=["\']([^"\']+)["\'][^>]*name=["\']authenticity_token["\']',local,re.I)
+          if not m:
+              raise SystemExit('authenticity_token not found')
+          print(html.unescape(m.group(1)))
           PY
           )
-          curl --fail --retry 3 -A "$UA" -c cookies.txt -b cookies.txt \
+          echo "TOKEN_LEN=${#TOKEN}"
+          set +e
+          curl -L --retry 3 -A "$UA" -c cookies.txt -b cookies.txt \
             -H "Referer: $BASE$PROJECT" \
             -H 'Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml' \
             -H 'Content-Type: application/x-www-form-urlencoded' \
@@ -46,29 +56,44 @@ jobs:
             --data-urlencode 'person_id=' \
             --data-urlencode 'storage=local' \
             -D post-headers.txt -o post-body.html \
-            "$BASE$PROJECT/downloads/project"
+            -w '%{http_code}' \
+            "$BASE$PROJECT/downloads/project" > http-status.txt
+          rc=$?
+          set -e
+          echo "CURL_RC=$rc HTTP_STATUS=$(cat http-status.txt)"
           echo '--- POST HEADERS ---'
-          cat post-headers.txt
+          cat post-headers.txt || true
           echo '--- POST BODY ---'
-          head -c 100000 post-body.html
+          head -c 100000 post-body.html || true
           echo
           python - <<'PY'
-          import re,html,json
-          s=open('post-body.html',encoding='utf-8',errors='replace').read()
+          import re,html,json,os
+          s=open('post-body.html',encoding='utf-8',errors='replace').read() if os.path.exists('post-body.html') else ''
           vals=[]
-          for m in re.findall(r'(?:https?://[^"\'<> ]+|/[^"\'<> ]*(?:download|archive|zip|storage|file)[^"\'<> ]*)',s,re.I):
-              m=html.unescape(m).replace('\\/','/')
-              if m not in vals: vals.append(m)
+          pats=[
+              r'https?://[^"\'<> ]+',
+              r'(?:href|src)=["\']([^"\']+)["\']',
+              r'[^"\'<> ]+\.zip(?:\?[^"\'<> ]*)?',
+          ]
+          for pat in pats:
+              for m in re.findall(pat,s,re.I):
+                  if isinstance(m,tuple): m=next((x for x in m if x),'')
+                  m=html.unescape(m).replace('\\/','/')
+                  if m and m not in vals: vals.append(m)
           print('CANDIDATES')
-          for x in vals[:200]: print(x)
+          for x in vals[:300]: print(x)
           PY
       - name: Save archive-request response
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: wfolio-archive-request
           path: |
             post-headers.txt
             post-body.html
+            http-status.txt
             cookies.txt
+            download-project.html
           compression-level: 9
           retention-days: 1
+          if-no-files-found: warn
