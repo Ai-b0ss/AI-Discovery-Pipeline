@@ -11,78 +11,54 @@ permissions:
   contents: read
 
 jobs:
-  inspect:
+  inspect-wfolio:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-
-      - name: Inspect new Yandex public folder recursively
+      - name: Inspect Wfolio download and pieces endpoints
         env:
-          PUBLIC_KEY: https://disk.yandex.ru/d/W4ZzS8wAMv8RlA
-        run: |
-          python - <<'PY'
-          import json, os, time, urllib.parse, urllib.request
-          key=os.environ['PUBLIC_KEY']
-          api='https://cloud-api.yandex.net/v1/disk/public/resources'
-          files=[]; dirs=[]; stack=['/']; seen=set()
-          while stack:
-              path=stack.pop()
-              if path in seen: continue
-              seen.add(path); dirs.append(path)
-              offset=0
-              while True:
-                  q=urllib.parse.urlencode({'public_key':key,'path':path,'limit':1000,'offset':offset})
-                  req=urllib.request.Request(api+'?'+q,headers={'User-Agent':'Mozilla/5.0'})
-                  with urllib.request.urlopen(req,timeout=60) as r: data=json.load(r)
-                  emb=data.get('_embedded') or {}; items=emb.get('items') or []
-                  for x in items:
-                      if x.get('type')=='dir' and x.get('path'): stack.append(x['path'])
-                      elif x.get('type')=='file':
-                          files.append({k:x.get(k) for k in ['name','path','size','mime_type','md5','sha256','media_type']})
-                  offset += len(items)
-                  if not items or offset >= int(emb.get('total') or offset): break
-          out={'public_key':key,'file_count':len(files),'dir_count':len(dirs),'total_bytes':sum(int(x.get('size') or 0) for x in files),'files':files}
-          json.dump(out,open('yandex-june30.json','w'),ensure_ascii=False,indent=2)
-          print('YANDEX_FILES',out['file_count'])
-          print('YANDEX_DIRS',out['dir_count'])
-          print('YANDEX_TOTAL_BYTES',out['total_bytes'])
-          for x in files: print('YFILE',x.get('size'),x.get('mime_type'),x.get('path'))
-          PY
-
-      - name: Inspect Wfolio disk page
-        env:
-          URL: https://olyashevchuk88.wfolio.pro/disk/soho-30-06-2026-terrasa-wm28ks
+          BASE: https://olyashevchuk88.wfolio.pro
+          PROJECT: /disk/soho-30-06-2026-terrasa-wm28ks
         run: |
           set -euo pipefail
-          curl -L --fail --retry 3 -A 'Mozilla/5.0' -D wfolio-headers.txt "$URL" -o wfolio.html
-          echo "WFOLIO_HTML_BYTES=$(stat -c%s wfolio.html)"
-          echo '--- HEADERS ---'
-          cat wfolio-headers.txt
-          echo '--- INTERESTING HTML LINES ---'
-          grep -Eio '.{0,120}(download|original|file|photo|image|disk|zip|jpg|jpeg|webp|png|mp4|api).{0,220}' wfolio.html | head -300 || true
+          UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/146 Safari/537.36'
+          curl -L --fail --retry 3 -A "$UA" -c cookies.txt -b cookies.txt "$BASE$PROJECT" -o page.html
+          curl -L --fail --retry 3 -A "$UA" -c cookies.txt -b cookies.txt \
+            -H 'Turbo-Frame: modal' -H 'Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml' \
+            "$BASE$PROJECT/downloads/project" -D download-headers.txt -o download-project.html
+          curl -L --fail --retry 3 -A "$UA" -c cookies.txt -b cookies.txt \
+            "$BASE$PROJECT/pieces?design_variant=storyboard&folder_path=photos" -D pieces-headers.txt -o pieces.html
+          JS='/assets/disk.application-5a392d20bf11aead8ce690a436871ddd2449c3d702cd8f3c5e8c1e8991c244c5.js'
+          curl -L --fail --retry 3 -A "$UA" "$BASE$JS" -o disk.js
+
           python - <<'PY'
-          import json,re,html
-          s=open('wfolio.html',encoding='utf-8',errors='replace').read()
-          urls=[]
-          for raw in re.findall(r'https?://[^"\'<>\\ ]+',s):
-              u=html.unescape(raw).replace('\\u0026','&').replace('\\/','/')
-              if u not in urls: urls.append(u)
-          candidates=[u for u in urls if any(k in u.lower() for k in ['jpg','jpeg','png','webp','download','original','storage','cdn','api','disk'])]
-          data={'html_bytes':len(s.encode('utf-8')),'all_url_count':len(urls),'candidate_urls':candidates}
-          json.dump(data,open('wfolio-summary.json','w'),ensure_ascii=False,indent=2)
-          print('WFOLIO_URLS',len(urls),'CANDIDATES',len(candidates))
-          for u in candidates[:300]: print('WURL',u)
+          import re, json, html, os
+          for fn in ['download-project.html','pieces.html','disk.js']:
+              s=open(fn,encoding='utf-8',errors='replace').read()
+              print('\n###',fn,'bytes',len(s.encode()))
+              patterns=[r'<form[^>]+>',r'action="[^"]+"',r'href="[^"]+"',r'data-[\w-]+="[^"]+"',r'https?://[^"\'<>\\ ]+',r'/disk/[^"\'<> ]+']
+              seen=[]
+              for pat in patterns:
+                  for m in re.findall(pat,s,re.I):
+                      m=html.unescape(m).replace('\\/','/')
+                      if m not in seen and any(k in m.lower() for k in ['download','original','preview','piece','google','yandex','archive','zip','file','photo','folder']):
+                          seen.append(m)
+              for x in seen[:500]: print(x[:2000])
+              if fn=='pieces.html':
+                  print('img-ish count',len(re.findall(r'<(?:img|picture|source)\b',s,re.I)))
+                  print('piece ids',len(set(re.findall(r'(?:piece|photo)[_-]?(\d+)',s,re.I))))
           PY
 
-      - name: Package inspection text only
+      - name: Package Wfolio inspection
         uses: actions/upload-artifact@v7
         with:
-          name: june30-source-inspection
+          name: wfolio-download-inspection
           path: |
-            yandex-june30.json
-            wfolio.html
-            wfolio-headers.txt
-            wfolio-summary.json
+            download-project.html
+            download-headers.txt
+            pieces.html
+            pieces-headers.txt
+            disk.js
           compression-level: 9
           retention-days: 1
