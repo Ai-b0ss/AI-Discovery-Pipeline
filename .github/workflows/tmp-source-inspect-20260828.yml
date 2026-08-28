@@ -1,0 +1,88 @@
+name: tmp-source-inspect-20260828
+
+on:
+  push:
+    branches:
+      - tmp/yandex-drive-transfer-20260828
+    paths:
+      - tmp-source-inspect-trigger.txt
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Inspect new Yandex public folder recursively
+        env:
+          PUBLIC_KEY: https://disk.yandex.ru/d/W4ZzS8wAMv8RlA
+        run: |
+          python - <<'PY'
+          import json, os, time, urllib.parse, urllib.request
+          key=os.environ['PUBLIC_KEY']
+          api='https://cloud-api.yandex.net/v1/disk/public/resources'
+          files=[]; dirs=[]; stack=['/']; seen=set()
+          while stack:
+              path=stack.pop()
+              if path in seen: continue
+              seen.add(path); dirs.append(path)
+              offset=0
+              while True:
+                  q=urllib.parse.urlencode({'public_key':key,'path':path,'limit':1000,'offset':offset})
+                  req=urllib.request.Request(api+'?'+q,headers={'User-Agent':'Mozilla/5.0'})
+                  with urllib.request.urlopen(req,timeout=60) as r: data=json.load(r)
+                  emb=data.get('_embedded') or {}; items=emb.get('items') or []
+                  for x in items:
+                      if x.get('type')=='dir' and x.get('path'): stack.append(x['path'])
+                      elif x.get('type')=='file':
+                          files.append({k:x.get(k) for k in ['name','path','size','mime_type','md5','sha256','media_type']})
+                  offset += len(items)
+                  if not items or offset >= int(emb.get('total') or offset): break
+          out={'public_key':key,'file_count':len(files),'dir_count':len(dirs),'total_bytes':sum(int(x.get('size') or 0) for x in files),'files':files}
+          json.dump(out,open('yandex-june30.json','w'),ensure_ascii=False,indent=2)
+          print('YANDEX_FILES',out['file_count'])
+          print('YANDEX_DIRS',out['dir_count'])
+          print('YANDEX_TOTAL_BYTES',out['total_bytes'])
+          for x in files: print('YFILE',x.get('size'),x.get('mime_type'),x.get('path'))
+          PY
+
+      - name: Inspect Wfolio disk page
+        env:
+          URL: https://olyashevchuk88.wfolio.pro/disk/soho-30-06-2026-terrasa-wm28ks
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 -A 'Mozilla/5.0' -D wfolio-headers.txt "$URL" -o wfolio.html
+          echo "WFOLIO_HTML_BYTES=$(stat -c%s wfolio.html)"
+          echo '--- HEADERS ---'
+          cat wfolio-headers.txt
+          echo '--- INTERESTING HTML LINES ---'
+          grep -Eio '.{0,120}(download|original|file|photo|image|disk|zip|jpg|jpeg|webp|png|mp4|api).{0,220}' wfolio.html | head -300 || true
+          python - <<'PY'
+          import json,re,html
+          s=open('wfolio.html',encoding='utf-8',errors='replace').read()
+          urls=[]
+          for raw in re.findall(r'https?://[^"\'<>\\ ]+',s):
+              u=html.unescape(raw).replace('\\u0026','&').replace('\\/','/')
+              if u not in urls: urls.append(u)
+          candidates=[u for u in urls if any(k in u.lower() for k in ['jpg','jpeg','png','webp','download','original','storage','cdn','api','disk'])]
+          data={'html_bytes':len(s.encode('utf-8')),'all_url_count':len(urls),'candidate_urls':candidates}
+          json.dump(data,open('wfolio-summary.json','w'),ensure_ascii=False,indent=2)
+          print('WFOLIO_URLS',len(urls),'CANDIDATES',len(candidates))
+          for u in candidates[:300]: print('WURL',u)
+          PY
+
+      - name: Package inspection text only
+        uses: actions/upload-artifact@v7
+        with:
+          name: june30-source-inspection
+          path: |
+            yandex-june30.json
+            wfolio.html
+            wfolio-headers.txt
+            wfolio-summary.json
+          compression-level: 9
+          retention-days: 1
