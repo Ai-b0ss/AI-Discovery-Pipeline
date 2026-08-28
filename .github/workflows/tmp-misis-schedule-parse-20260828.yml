@@ -1,0 +1,79 @@
+name: tmp-misis-schedule-parse-20260828
+on:
+  push:
+    paths:
+      - '.github/workflows/tmp-misis-schedule-parse-20260828.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  parse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download and parse official MISIS XLS
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install -q xlrd==2.0.1
+          python3 - <<'PY'
+          import urllib.request,re,hashlib
+          from pathlib import Path
+          import xlrd
+          url='https://misis.ru/files/-/504f0d5daceff524b3076082666fa485/itkn-260826.xls'
+          headers={
+            'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/146.0 Safari/537.36',
+            'Referer':'https://misis.ru/students/',
+            'Accept':'application/vnd.ms-excel,application/octet-stream,*/*;q=0.8'
+          }
+          req=urllib.request.Request(url,headers=headers)
+          with urllib.request.urlopen(req,timeout=90) as r:
+            data=r.read(); print('HTTP',r.status,'TYPE',r.headers.get('content-type'),'BYTES',len(data))
+          print('SHA256',hashlib.sha256(data).hexdigest(),'MAGIC',data[:16].hex())
+          p=Path('/tmp/itkn-260826.xls'); p.write_bytes(data)
+          book=xlrd.open_workbook(str(p),formatting_info=True)
+          print('SHEETS',[(s.name,s.nrows,s.ncols) for s in book.sheets()])
+          def tx(v):
+            if v is None:return ''
+            if isinstance(v,float) and v.is_integer():return str(int(v))
+            return str(v).replace('\r',' / ').replace('\n',' / ').strip()
+          # dump every cell containing target plus merged ranges and generous rectangular context
+          pat=re.compile(r'ББИ[\s\-–—]*26[\s\-–—]*6[\s\-–—]*4',re.I)
+          hits=[]
+          for si,sh in enumerate(book.sheets()):
+            for r in range(sh.nrows):
+              for c in range(sh.ncols):
+                t=tx(sh.cell_value(r,c))
+                if pat.search(t): hits.append((si,r,c,t))
+          print('TARGET_HITS',hits)
+          print('MERGED_RANGES')
+          for si,r,c,t in hits:
+            sh=book.sheet_by_index(si)
+            for rng in sh.merged_cells:
+              if rng[0] <= r < rng[1] and rng[2] <= c < rng[3]: print(sh.name,rng)
+          for i,(si,hr,hc,ht) in enumerate(hits,1):
+            sh=book.sheet_by_index(si)
+            print(f'=== TARGET {i} {sh.name} R{hr+1} C{hc+1} {ht!r} ===')
+            # Full target column plus 3 neighbors either side, all rows
+            for r in range(sh.nrows):
+              vals=[]
+              for c in range(max(0,hc-3),min(sh.ncols,hc+4)):
+                t=tx(sh.cell_value(r,c))
+                if t: vals.append(f'C{c+1}={t}')
+              if vals: print(f'ROW {r+1}: '+' || '.join(vals))
+            print('=== LOCAL +-20 rows +-10 cols ===')
+            for r in range(max(0,hr-20),min(sh.nrows,hr+21)):
+              vals=[]
+              for c in range(max(0,hc-10),min(sh.ncols,hc+11)):
+                t=tx(sh.cell_value(r,c))
+                if t: vals.append(f'C{c+1}={t}')
+              if vals: print(f'ROW {r+1}: '+' || '.join(vals))
+          if not hits:
+            print('=== ALL BBI-26 CELLS ===')
+            for sh in book.sheets():
+              for r in range(sh.nrows):
+                for c in range(sh.ncols):
+                  t=tx(sh.cell_value(r,c))
+                  if 'ББИ' in t.upper() and '26' in t: print(sh.name,r+1,c+1,t)
+            raise SystemExit(2)
+          PY
