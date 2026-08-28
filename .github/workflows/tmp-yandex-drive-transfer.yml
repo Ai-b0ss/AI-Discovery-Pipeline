@@ -28,22 +28,30 @@ jobs:
           chunk=int(c.get('chunk_size',500_000_000))
           if chunk <= 0 or chunk > 520_000_000:
               raise SystemExit('chunk_size must be in 1..520000000')
-          parts=[]
           n=math.ceil(total/chunk)
-          for i in range(n):
+          first=int(c.get('first_part',1))
+          count=int(c.get('count',n-first+1))
+          if first < 1 or first > n:
+              raise SystemExit(f'first_part must be in 1..{n}')
+          if count <= 0:
+              raise SystemExit('count must be positive')
+          last=min(n,first+count-1)
+          parts=[]
+          for part_num in range(first,last+1):
+              i=part_num-1
               start=i*chunk
               end=min(total-1,(i+1)*chunk-1)
               parts.append({
-                  'part':i+1,
+                  'part':part_num,
                   'start':start,
                   'end':end,
                   'size':end-start+1,
-                  'name':f"payload.part{i+1:03d}",
+                  'name':f"payload.part{part_num:03d}",
               })
           matrix=json.dumps({'include':parts},separators=(',',':'))
           with open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8') as f:
               f.write('matrix='+matrix+'\n')
-          print(json.dumps(parts,indent=2))
+          print(json.dumps({'total_parts':n,'requested_first':first,'requested_last':last,'parts':parts},indent=2))
           PY
       - name: Delete obsolete temporary payload artifacts
         env:
@@ -89,16 +97,16 @@ jobs:
                       href=json.load(r)['href']
                   req=urllib.request.Request(href,headers={
                       'User-Agent':'Mozilla/5.0','Range':f'bytes={start}-{end}','Accept-Encoding':'identity'})
-                  h=hashlib.sha256(); n=0
+                  h=hashlib.sha256(); nbytes=0
                   with urllib.request.urlopen(req,timeout=300) as r, open(name,'wb') as f:
                       status=getattr(r,'status',None); cr=r.headers.get('Content-Range')
                       while True:
                           b=r.read(8*1024*1024)
                           if not b: break
-                          f.write(b); h.update(b); n+=len(b)
-                  if n != expected:
-                      raise RuntimeError(f'bad range size expected={expected} actual={n} status={status} content-range={cr!r}')
-                  print(f'PART_OK name={name} start={start} end={end} bytes={n} sha256={h.hexdigest()}')
+                          f.write(b); h.update(b); nbytes+=len(b)
+                  if nbytes != expected:
+                      raise RuntimeError(f'bad range size expected={expected} actual={nbytes} status={status} content-range={cr!r}')
+                  print(f'PART_OK name={name} start={start} end={end} bytes={nbytes} sha256={h.hexdigest()}')
                   break
               except Exception as e:
                   last=e
