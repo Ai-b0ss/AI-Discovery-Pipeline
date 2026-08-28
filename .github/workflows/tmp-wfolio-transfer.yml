@@ -1,0 +1,100 @@
+name: tmp-wfolio-transfer
+
+on:
+  push:
+    branches:
+      - tmp/yandex-drive-transfer-20260828
+    paths:
+      - tmp-wfolio-control.json
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        run: |
+          python - <<'PY'
+          import json,os
+          c=json.load(open('tmp-wfolio-control.json',encoding='utf-8'))
+          total=int(c['expected_size']); chunk=int(c['chunk_size'])
+          first=int(c['first_part']); count=int(c.get('count',4))
+          n=(total+chunk-1)//chunk
+          parts=[]
+          for p in range(first,min(n+1,first+count)):
+              start=(p-1)*chunk; end=min(total-1,p*chunk-1)
+              parts.append({'part':p,'start':start,'end':end,'size':end-start+1,'name':f'wfolio.part{p:03d}'})
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:
+              f.write('matrix='+json.dumps({'include':parts},separators=(',',':'))+'\n')
+          print(json.dumps(parts,indent=2))
+          PY
+      - name: Delete previous temporary Wfolio artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.name | startswith("wfolio.part")) | .id' \
+          | while read -r id; do [ -n "$id" ] && gh api -X DELETE "/repos/$GITHUB_REPOSITORY/actions/artifacts/$id"; done
+
+  part:
+    needs: plan
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download exact Wfolio archive range
+        env:
+          PART_START: ${{ matrix.start }}
+          PART_END: ${{ matrix.end }}
+          PART_SIZE: ${{ matrix.size }}
+          PART_NAME: ${{ matrix.name }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json,os,re,urllib.request,hashlib,time
+          c=json.load(open('tmp-wfolio-control.json',encoding='utf-8'))
+          start=int(os.environ['PART_START']); end=int(os.environ['PART_END']); expected=int(os.environ['PART_SIZE']); name=os.environ['PART_NAME']
+          total=int(c['expected_size']); url=c['archive_url']; etag_expected=c.get('etag')
+          last=None
+          for attempt in range(5):
+              try:
+                  req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0','Range':f'bytes={start}-{end}','Accept-Encoding':'identity'})
+                  h=hashlib.sha256(); n=0
+                  with urllib.request.urlopen(req,timeout=300) as r, open(name,'wb') as f:
+                      status=getattr(r,'status',None); cr=r.headers.get('Content-Range'); etag=r.headers.get('ETag')
+                      if status != 206: raise RuntimeError(f'expected 206 got {status}')
+                      m=re.fullmatch(r'bytes (\d+)-(\d+)/(\d+)',cr or '')
+                      if not m or tuple(map(int,m.groups())) != (start,end,total): raise RuntimeError(f'bad Content-Range {cr!r}')
+                      if etag_expected and etag != etag_expected: raise RuntimeError(f'bad ETag {etag!r}')
+                      while True:
+                          b=r.read(8*1024*1024)
+                          if not b: break
+                          f.write(b); h.update(b); n+=len(b)
+                  if n != expected: raise RuntimeError(f'bad size {n} != {expected}')
+                  print(f'WFOLIO_PART_OK name={name} bytes={n} sha256={h.hexdigest()} etag={etag}')
+                  break
+              except Exception as e:
+                  last=e
+                  try: os.remove(name)
+                  except FileNotFoundError: pass
+                  if attempt==4: raise
+                  time.sleep(min(20,2**attempt))
+          PY
+      - name: Upload raw Wfolio volume
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}
+          archive: false
+          retention-days: 1
+          if-no-files-found: error
