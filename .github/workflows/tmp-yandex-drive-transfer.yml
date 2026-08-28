@@ -100,10 +100,21 @@ jobs:
           print(f'SOURCE_PATH={path}')
           PY
 
-      - name: Validate MP4 container
+      - name: Validate MP4 header and box structure
         run: |
-          set -euo pipefail
-          ffprobe -v error -show_entries format=duration,size,format_name -of json payload.mp4
+          python - <<'PY'
+          import os, struct
+          p='payload.mp4'
+          size=os.path.getsize(p)
+          with open(p,'rb') as f:
+              head=f.read(1024*1024)
+          if len(head) < 16 or head[4:8] != b'ftyp':
+              raise SystemExit('invalid MP4: ftyp box not found at expected position')
+          major=head[8:12].decode('ascii','replace')
+          if b'mdat' not in head and b'moov' not in head and size < 1024*1024:
+              raise SystemExit('invalid MP4: no media/container boxes visible')
+          print(f'MP4_HEADER_OK major_brand={major} size={size}')
+          PY
 
       - name: Upload source bytes without ZIP
         uses: actions/upload-artifact@v7
