@@ -11,12 +11,12 @@ permissions:
   contents: read
 
 jobs:
-  inspect-wfolio:
+  wfolio-archive:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Inspect Wfolio download and pieces endpoints
+      - name: Request original-size Wfolio project archive
         env:
           BASE: https://olyashevchuk88.wfolio.pro
           PROJECT: /disk/soho-30-06-2026-terrasa-wm28ks
@@ -26,39 +26,49 @@ jobs:
           curl -L --fail --retry 3 -A "$UA" -c cookies.txt -b cookies.txt "$BASE$PROJECT" -o page.html
           curl -L --fail --retry 3 -A "$UA" -c cookies.txt -b cookies.txt \
             -H 'Turbo-Frame: modal' -H 'Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml' \
-            "$BASE$PROJECT/downloads/project" -D download-headers.txt -o download-project.html
-          curl -L --fail --retry 3 -A "$UA" -c cookies.txt -b cookies.txt \
-            "$BASE$PROJECT/pieces?design_variant=storyboard&folder_path=photos" -D pieces-headers.txt -o pieces.html
-          JS='/assets/disk.application-5a392d20bf11aead8ce690a436871ddd2449c3d702cd8f3c5e8c1e8991c244c5.js'
-          curl -L --fail --retry 3 -A "$UA" "$BASE$JS" -o disk.js
-
-          python - <<'PY'
-          import re, json, html, os
-          for fn in ['download-project.html','pieces.html','disk.js']:
-              s=open(fn,encoding='utf-8',errors='replace').read()
-              print('\n###',fn,'bytes',len(s.encode()))
-              patterns=[r'<form[^>]+>',r'action="[^"]+"',r'href="[^"]+"',r'data-[\w-]+="[^"]+"',r'https?://[^"\'<>\\ ]+',r'/disk/[^"\'<> ]+']
-              seen=[]
-              for pat in patterns:
-                  for m in re.findall(pat,s,re.I):
-                      m=html.unescape(m).replace('\\/','/')
-                      if m not in seen and any(k in m.lower() for k in ['download','original','preview','piece','google','yandex','archive','zip','file','photo','folder']):
-                          seen.append(m)
-              for x in seen[:500]: print(x[:2000])
-              if fn=='pieces.html':
-                  print('img-ish count',len(re.findall(r'<(?:img|picture|source)\b',s,re.I)))
-                  print('piece ids',len(set(re.findall(r'(?:piece|photo)[_-]?(\d+)',s,re.I))))
+            "$BASE$PROJECT/downloads/project" -o download-project.html
+          TOKEN=$(python - <<'PY'
+          from bs4 import BeautifulSoup
+          s=BeautifulSoup(open('download-project.html',encoding='utf-8'),'html.parser')
+          f=next(f for f in s.find_all('form') if f.find('button',attrs={'name':'storage','value':'local'}))
+          print(f.find('input',attrs={'name':'authenticity_token'})['value'])
           PY
-
-      - name: Package Wfolio inspection
+          )
+          curl --fail --retry 3 -A "$UA" -c cookies.txt -b cookies.txt \
+            -H "Referer: $BASE$PROJECT" \
+            -H 'Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml' \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            --data-urlencode "authenticity_token=$TOKEN" \
+            --data-urlencode 'scope=project' \
+            --data-urlencode 'folder_path=' \
+            --data-urlencode 'size=original' \
+            --data-urlencode 'cart_secure_id=' \
+            --data-urlencode 'person_id=' \
+            --data-urlencode 'storage=local' \
+            -D post-headers.txt -o post-body.html \
+            "$BASE$PROJECT/downloads/project"
+          echo '--- POST HEADERS ---'
+          cat post-headers.txt
+          echo '--- POST BODY ---'
+          head -c 100000 post-body.html
+          echo
+          python - <<'PY'
+          import re,html,json
+          s=open('post-body.html',encoding='utf-8',errors='replace').read()
+          vals=[]
+          for m in re.findall(r'(?:https?://[^"\'<> ]+|/[^"\'<> ]*(?:download|archive|zip|storage|file)[^"\'<> ]*)',s,re.I):
+              m=html.unescape(m).replace('\\/','/')
+              if m not in vals: vals.append(m)
+          print('CANDIDATES')
+          for x in vals[:200]: print(x)
+          PY
+      - name: Save archive-request response
         uses: actions/upload-artifact@v7
         with:
-          name: wfolio-download-inspection
+          name: wfolio-archive-request
           path: |
-            download-project.html
-            download-headers.txt
-            pieces.html
-            pieces-headers.txt
-            disk.js
+            post-headers.txt
+            post-body.html
+            cookies.txt
           compression-level: 9
           retention-days: 1
