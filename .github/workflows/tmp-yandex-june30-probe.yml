@@ -1,0 +1,43 @@
+name: tmp-yandex-june30-probe
+
+on:
+  push:
+    branches:
+      - tmp/yandex-drive-transfer-20260828
+    paths:
+      - tmp-yandex-june30-probe.txt
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Probe public folder download endpoints
+        run: |
+          python - <<'PY'
+          import json, urllib.parse, urllib.request
+          key='https://disk.yandex.ru/d/W4ZzS8wAMv8RlA'
+          for path in ['/ВСЕ','/ИНДИВИДУАЛЬНЫЕ 1']:
+              print('\n===',path,'===')
+              api='https://cloud-api.yandex.net/v1/disk/public/resources/download?'+urllib.parse.urlencode({'public_key':key,'path':path})
+              try:
+                  req=urllib.request.Request(api,headers={'User-Agent':'Mozilla/5.0'})
+                  with urllib.request.urlopen(req,timeout=60) as r:
+                      body=r.read().decode('utf-8','replace')
+                      print('API',r.status,body[:2000])
+                      try: href=json.loads(body).get('href')
+                      except Exception: href=None
+                  if href:
+                      req=urllib.request.Request(href,method='HEAD',headers={'User-Agent':'Mozilla/5.0'})
+                      with urllib.request.urlopen(req,timeout=60) as r:
+                          print('HEAD',r.status,dict(r.headers))
+                      req=urllib.request.Request(href,headers={'User-Agent':'Mozilla/5.0','Range':'bytes=0-1048575','Accept-Encoding':'identity'})
+                      with urllib.request.urlopen(req,timeout=60) as r:
+                          b=r.read(1048577)
+                          print('RANGE',r.status,'len',len(b),'Content-Range',r.headers.get('Content-Range'),'Content-Type',r.headers.get('Content-Type'))
+              except Exception as e:
+                  print('ERROR',type(e).__name__,repr(e))
+          PY
