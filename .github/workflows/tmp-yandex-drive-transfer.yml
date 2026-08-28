@@ -6,53 +6,19 @@ on:
       - tmp/yandex-drive-transfer-20260828
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  links:
+  release-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
-      - name: Get signed download links
+      - name: Create tiny release asset
         env:
-          PUBLIC_KEY: https://disk.yandex.ru/d/GedxLT7sVZldWw
+          GH_TOKEN: ${{ github.token }}
+          TAG: tmp-yandex-transfer-test-20260828
         run: |
-          python - <<'PY'
-          import json, os, time, urllib.parse, urllib.request
-
-          public_key = os.environ['PUBLIC_KEY']
-          paths = [
-            '/Последний звонок готовое/Последний звонок клип.mp4',
-            '/Последний звонок готовое/Последний звонок.mp4',
-            '/Выпускной готовое/выпускной клип.mp4',
-            '/Выпускной готовое/выпускной.mp4',
-          ]
-          api = 'https://cloud-api.yandex.net/v1/disk/public/resources/download'
-          out = []
-          for path in paths:
-              url = api + '?' + urllib.parse.urlencode({'public_key': public_key, 'path': path})
-              last = None
-              for i in range(5):
-                  try:
-                      req = urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0'})
-                      with urllib.request.urlopen(req, timeout=60) as r:
-                          data = json.load(r)
-                      href = data['href']
-                      out.append({'path': path, 'name': path.rsplit('/',1)[-1], 'href': href})
-                      print('OK', path, len(href))
-                      break
-                  except Exception as e:
-                      last = e
-                      time.sleep(min(16, 2 ** i))
-              else:
-                  raise last
-          with open('yandex-links.json','w',encoding='utf-8') as f:
-              json.dump(out,f,ensure_ascii=False,indent=2)
-          PY
-      - name: Upload signed links
-        uses: actions/upload-artifact@v4
-        with:
-          name: yandex-signed-links
-          path: yandex-links.json
-          retention-days: 1
-          compression-level: 9
+          set -euo pipefail
+          printf 'release-bridge-test\n' > bridge-test.txt
+          gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" bridge-test.txt --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Temporary Yandex transfer test" --notes "Temporary; will be deleted."
