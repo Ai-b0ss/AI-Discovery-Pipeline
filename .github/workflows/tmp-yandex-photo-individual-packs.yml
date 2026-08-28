@@ -1,0 +1,127 @@
+name: tmp-yandex-photo-individual-packs
+
+on:
+  push:
+    branches:
+      - tmp/yandex-drive-transfer-20260828
+    paths:
+      - tmp-yandex-photo-individual-control.json
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      total_groups: ${{ steps.plan.outputs.total_groups }}
+      total_files: ${{ steps.plan.outputs.total_files }}
+      total_bytes: ${{ steps.plan.outputs.total_bytes }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        run: |
+          python - <<'PY'
+          import json,os,urllib.parse,urllib.request
+          c=json.load(open('tmp-yandex-photo-individual-control.json',encoding='utf-8'))
+          key=c['public_key']; root=c['folder_path']; target=int(c.get('target_pack_bytes',90000000))
+          files=[]
+          def list_dir(path):
+              offset=0
+              while True:
+                  q=urllib.parse.urlencode({'public_key':key,'path':path,'limit':1000,'offset':offset})
+                  req=urllib.request.Request('https://cloud-api.yandex.net/v1/disk/public/resources?'+q,headers={'User-Agent':'Mozilla/5.0'})
+                  with urllib.request.urlopen(req,timeout=60) as r: data=json.load(r)
+                  emb=data.get('_embedded',{}); items=emb.get('items',[])
+                  for it in items:
+                      if it.get('type')=='file': files.append({'path':it['path'],'size':int(it['size']),'name':it['name']})
+                      elif it.get('type')=='dir': list_dir(it['path'])
+                  offset += len(items)
+                  if not items or offset >= int(emb.get('total',offset)): break
+          list_dir(root)
+          files.sort(key=lambda x:x['path'])
+          groups=[]; cur=[]; n=0
+          for f in files:
+              if f['size'] >= 104000000: raise SystemExit(f"single photo too large for Drive gateway: {f}")
+              if cur and n+f['size'] > target:
+                  groups.append(cur); cur=[]; n=0
+              cur.append(f); n+=f['size']
+          if cur: groups.append(cur)
+          first=int(c['first_group']); count=int(c.get('count',4)); prefix=c['artifact_prefix']
+          selected=[]
+          for g in range(first,min(len(groups)+1,first+count)):
+              fs=groups[g-1]
+              selected.append({'group':g,'name':f'{prefix}{g:03d}.zip','files':fs,'raw_bytes':sum(x['size'] for x in fs)})
+          matrix=json.dumps({'include':selected},separators=(',',':'),ensure_ascii=False)
+          with open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8') as out:
+              out.write('matrix='+matrix+'\n'); out.write('total_groups='+str(len(groups))+'\n'); out.write('total_files='+str(len(files))+'\n'); out.write('total_bytes='+str(sum(x['size'] for x in files))+'\n')
+          print('TOTAL_FILES',len(files),'TOTAL_BYTES',sum(x['size'] for x in files),'TOTAL_GROUPS',len(groups))
+          for x in selected: print('GROUP',x['group'],'FILES',len(x['files']),'RAW_BYTES',x['raw_bytes'],x['name'])
+          PY
+      - name: Delete previous temporary individual photo pack artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.name | startswith("june30_individual_")) | .id' \
+          | while read -r id; do [ -n "$id" ] && gh api -X DELETE "/repos/$GITHUB_REPOSITORY/actions/artifacts/$id"; done
+
+  pack:
+    needs: plan
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build standalone ZIP from complete JPEG files
+        env:
+          PACK_NAME: ${{ matrix.name }}
+          FILES_JSON: ${{ toJSON(matrix.files) }}
+          EXPECTED_RAW: ${{ matrix.raw_bytes }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json,os,urllib.parse,urllib.request,tempfile,zipfile,hashlib,pathlib
+          c=json.load(open('tmp-yandex-photo-individual-control.json',encoding='utf-8')); key=c['public_key']; root=c['folder_path'].rstrip('/')+'/'
+          fs=json.loads(os.environ['FILES_JSON']); expected_raw=int(os.environ['EXPECTED_RAW']); pack=os.environ['PACK_NAME']; raw=0
+          with zipfile.ZipFile(pack,'w',compression=zipfile.ZIP_STORED,allowZip64=True) as z:
+              for i,f in enumerate(fs,1):
+                  q=urllib.parse.urlencode({'public_key':key,'path':f['path']})
+                  req=urllib.request.Request('https://cloud-api.yandex.net/v1/disk/public/resources/download?'+q,headers={'User-Agent':'Mozilla/5.0'})
+                  with urllib.request.urlopen(req,timeout=60) as r: href=json.load(r)['href']
+                  fd,tmp=tempfile.mkstemp(prefix='photo_',suffix=pathlib.Path(f['name']).suffix); os.close(fd)
+                  try:
+                      req=urllib.request.Request(href,headers={'User-Agent':'Mozilla/5.0','Accept-Encoding':'identity'})
+                      n=0
+                      with urllib.request.urlopen(req,timeout=300) as r, open(tmp,'wb') as out:
+                          while True:
+                              b=r.read(8*1024*1024)
+                              if not b: break
+                              out.write(b); n+=len(b)
+                      if n != int(f['size']): raise RuntimeError(f"size mismatch {f['path']} expected={f['size']} got={n}")
+                      arc=f['path'][len(root):] if f['path'].startswith(root) else f['name']; z.write(tmp,arcname=arc); raw+=n
+                      print(f"PHOTO_OK {i}/{len(fs)} bytes={n} {arc}")
+                  finally:
+                      try: os.remove(tmp)
+                      except FileNotFoundError: pass
+          if raw != expected_raw: raise SystemExit(f'raw sum mismatch {raw} != {expected_raw}')
+          size=os.path.getsize(pack)
+          if size >= 104857600: raise SystemExit(f'pack too large for Drive gateway: {size}')
+          h=hashlib.sha256()
+          with open(pack,'rb') as f:
+              for b in iter(lambda:f.read(8*1024*1024),b''): h.update(b)
+          print(f'PACK_OK name={pack} files={len(fs)} raw_bytes={raw} zip_bytes={size} sha256={h.hexdigest()}')
+          PY
+      - name: Upload standalone individual photo pack
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}
+          archive: false
+          retention-days: 1
+          if-no-files-found: error
