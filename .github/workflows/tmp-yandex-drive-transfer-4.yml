@@ -1,0 +1,81 @@
+name: tmp-yandex-drive-transfer-4
+
+on:
+  push:
+    branches:
+      - tmp/yandex-drive-transfer-20260828
+    paths:
+      - tmp-yandex-control-4.json
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        run: |
+          python - <<'PY'
+          import json,math,os
+          c=json.load(open('tmp-yandex-control-4.json',encoding='utf-8')); total=int(c['expected_size']); chunk=int(c['chunk_size']); n=math.ceil(total/chunk); first=int(c['first_part']); count=int(c['count']); last=min(n,first+count-1); parts=[]
+          for p in range(first,last+1):
+              s=(p-1)*chunk; e=min(total-1,p*chunk-1); parts.append({'part':p,'start':s,'end':e,'size':e-s+1,'name':f'payload4.part{p:03d}'})
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f: f.write('matrix='+json.dumps({'include':parts},separators=(',',':'))+'\n')
+          print(json.dumps(parts,indent=2))
+          PY
+      - name: Delete obsolete lane-4 artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" --jq '.artifacts[] | select(.name | startswith("payload4.part")) | .id' | while read -r id; do [ -n "$id" ] && gh api -X DELETE "/repos/$GITHUB_REPOSITORY/actions/artifacts/$id"; done
+  part:
+    needs: plan
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download exact source byte range
+        env:
+          PART_START: ${{ matrix.start }}
+          PART_END: ${{ matrix.end }}
+          PART_SIZE: ${{ matrix.size }}
+          PART_NAME: ${{ matrix.name }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib,json,os,time,urllib.parse,urllib.request
+          c=json.load(open('tmp-yandex-control-4.json',encoding='utf-8')); start=int(os.environ['PART_START']); end=int(os.environ['PART_END']); expected=int(os.environ['PART_SIZE']); name=os.environ['PART_NAME']; api='https://cloud-api.yandex.net/v1/disk/public/resources/download?'+urllib.parse.urlencode({'public_key':c['public_key'],'path':c['path']})
+          for attempt in range(6):
+              try:
+                  with urllib.request.urlopen(urllib.request.Request(api,headers={'User-Agent':'Mozilla/5.0'}),timeout=60) as r: href=json.load(r)['href']
+                  req=urllib.request.Request(href,headers={'User-Agent':'Mozilla/5.0','Range':f'bytes={start}-{end}','Accept-Encoding':'identity'}); h=hashlib.sha256(); nbytes=0
+                  with urllib.request.urlopen(req,timeout=300) as r, open(name,'wb') as f:
+                      status=getattr(r,'status',None); cr=r.headers.get('Content-Range')
+                      while True:
+                          b=r.read(8*1024*1024)
+                          if not b: break
+                          f.write(b); h.update(b); nbytes+=len(b)
+                  if nbytes!=expected: raise RuntimeError(f'bad range size expected={expected} actual={nbytes} status={status} content-range={cr!r}')
+                  print(f'PART_OK {name} bytes={nbytes} sha256={h.hexdigest()}'); break
+              except Exception:
+                  try: os.remove(name)
+                  except FileNotFoundError: pass
+                  if attempt==5: raise
+                  time.sleep(min(30,2**attempt))
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}
+          archive: false
+          retention-days: 1
+          if-no-files-found: error
