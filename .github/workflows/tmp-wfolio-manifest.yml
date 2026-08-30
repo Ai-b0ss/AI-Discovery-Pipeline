@@ -1,0 +1,81 @@
+name: tmp-wfolio-manifest
+
+on:
+  push:
+    branches:
+      - tmp/yandex-drive-transfer-20260828
+    paths:
+      - tmp-wfolio-manifest-trigger.txt
+
+permissions:
+  contents: read
+
+jobs:
+  manifest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and verify original Wfolio archive
+        env:
+          ARCHIVE_URL: https://zip.wfolio.ru/gateway/mod_zip/disk/download/aGEgzHUhQe
+          EXPECTED_SIZE: '5584535044'
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 5 --retry-delay 2 --connect-timeout 30 "$ARCHIVE_URL" -o wfolio.zip
+          test "$(stat -c%s wfolio.zip)" = "$EXPECTED_SIZE"
+          python - <<'PY'
+          import hashlib, json, os, zipfile
+          path='wfolio.zip'
+          out='wfolio-files.jsonl'
+          with zipfile.ZipFile(path) as z:
+              bad=z.testzip()
+              if bad is not None:
+                  raise SystemExit(f'CRC failure: {bad}')
+              infos=[i for i in z.infolist() if not i.is_dir()]
+              if len(infos) != 877:
+                  raise SystemExit(f'expected 877 files, got {len(infos)}')
+              total=0
+              with open(out,'w',encoding='utf-8') as f:
+                  for idx,info in enumerate(infos,1):
+                      h=hashlib.sha256()
+                      with z.open(info) as src:
+                          while True:
+                              b=src.read(8*1024*1024)
+                              if not b: break
+                              h.update(b)
+                      total += info.file_size
+                      f.write(json.dumps({
+                          'index': idx,
+                          'name': info.filename,
+                          'size': info.file_size,
+                          'crc32': f'{info.CRC:08x}',
+                          'sha256': h.hexdigest(),
+                          'compress_type': info.compress_type,
+                          'compress_size': info.compress_size,
+                      },ensure_ascii=False)+'\n')
+              archive_sha=hashlib.sha256(open(path,'rb').read()).hexdigest()
+              summary={
+                  'archive_size': os.path.getsize(path),
+                  'archive_sha256': archive_sha,
+                  'file_count': len(infos),
+                  'uncompressed_total': total,
+                  'crc_test': 'PASS',
+                  'first': infos[0].filename,
+                  'entry_423': infos[422].filename,
+                  'entry_424': infos[423].filename,
+                  'last': infos[-1].filename,
+              }
+              open('wfolio-summary.json','w',encoding='utf-8').write(json.dumps(summary,ensure_ascii=False,indent=2))
+              print(json.dumps(summary,ensure_ascii=False,indent=2))
+          PY
+      - name: Upload manifest
+        uses: actions/upload-artifact@v7
+        with:
+          name: wfolio-source-manifest
+          path: |
+            wfolio-files.jsonl
+            wfolio-summary.json
+          compression-level: 9
+          retention-days: 7
+          if-no-files-found: error
