@@ -29,13 +29,10 @@ jobs:
           curl -fL --retry 8 --retry-delay 3 --output whole.bin "$URL"
           test "$(stat -c%s whole.bin)" = "$SIZE"
           echo "$SHA  whole.bin" | sha256sum -c -
-          cp tmp-yandex-whole-control.json whole-file-metadata.json
-      - name: Upload exact whole source file
-        uses: actions/upload-artifact@v4
+      - name: Upload exact raw whole source file
+        uses: actions/upload-artifact@v7
         with:
-          name: final-whole-file
-          path: |
-            whole.bin
-            whole-file-metadata.json
+          name: final-whole-file-raw
+          path: whole.bin
           retention-days: 7
-          compression-level: 0
+          archive: false
