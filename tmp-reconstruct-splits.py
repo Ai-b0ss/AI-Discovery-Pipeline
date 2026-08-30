@@ -4,7 +4,7 @@
 Safe properties:
 - raw byte concatenation only for .partNNN files;
 - exact part count and expected size checks;
-- optional SHA-256 verification;
+- SHA-256 verification for every Yandex MP4;
 - ZIP integrity test for reconstructed Wfolio archive;
 - safe ZIP extraction with traversal/conflicting-duplicate rejection.
 
@@ -18,20 +18,8 @@ import argparse
 import hashlib
 import os
 import shutil
-import sys
 import zipfile
 from pathlib import Path
-
-
-def sha256_file(path: Path, block: int = 8 * 1024 * 1024) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        while True:
-            b = f.read(block)
-            if not b:
-                break
-            h.update(b)
-    return h.hexdigest()
 
 
 def concat_parts(
@@ -91,7 +79,6 @@ def concat_parts(
 
 
 def _safe_member_path(root: Path, member: str) -> Path:
-    # ZIP member names are POSIX-like; reject absolute / parent traversal.
     candidate = (root / member).resolve()
     root_resolved = root.resolve()
     try:
@@ -149,14 +136,17 @@ def school(root: Path) -> None:
     concat_parts(
         grad / "выпускной.mp4 — части", "выпускной.mp4", 113,
         grad / "выпускной.mp4", 11_294_518_113,
+        "628bdd80894cd8296838d2011d0ed0f2ab4a3912629fec35eabe9bcabaf40ed9",
     )
     concat_parts(
         bell / "Последний звонок клип.mp4 — части", "Последний звонок клип.mp4", 16,
         bell / "Последний звонок клип.mp4", 1_528_082_371,
+        "5594451b481999b9ff8e2e656a937d48a603ae1d65148acd2f2fb30ab7ac27cd",
     )
     concat_parts(
         bell / "Последний звонок.mp4 — части", "Последний звонок.mp4", 51,
         bell / "Последний звонок.mp4", 5_053_962_886,
+        "12c31327edf92c6d0489b97738807d73fc696c7ad558edc1dedf624841f82856",
     )
 
 
