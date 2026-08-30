@@ -1,0 +1,24 @@
+{
+  "source": "https://disk.yandex.ru/d/GedxLT7sVZldWw",
+  "source_path": "/Выпускной готовое/выпускной.mp4",
+  "target_drive_folder": "/Google Drive/школа 1259/Выпускной готовое/выпускной.mp4 — части",
+  "source_size": 11294518113,
+  "source_sha256": "628bdd80894cd8296838d2011d0ed0f2ab4a3912629fec35eabe9bcabaf40ed9",
+  "workflow_run_id": 33282968987,
+  "retention_days": 7,
+  "parts": [
+    {"part":101,"artifact_id":9723531836,"size":100000000,"sha256":"3b07296af980038513ff33a9d53900fb947feedafc464a9e0b4875ee95eca212"},
+    {"part":102,"artifact_id":9723532493,"size":100000000,"sha256":"9626f2eeecbb688ffe52c8742905280fd9a80bb6df330832cee74427c5393b81"},
+    {"part":103,"artifact_id":9723532157,"size":100000000,"sha256":"9cf671c3274ae50fbd0518510bf937d07ad5a1f020ca12e53e9b6251cdb1b292"},
+    {"part":104,"artifact_id":9723532885,"size":100000000,"sha256":"8748c7e0b48f7b1e830875efbfeecfb227110cf707752e8660ec2c8fda3b47b7"},
+    {"part":105,"artifact_id":9723534780,"size":100000000,"sha256":"2e5ee283c47fb9b3183bdbe91a8bb51ede7b1f3d05bea2e98a331e41926f9fd2"},
+    {"part":106,"artifact_id":9723534604,"size":100000000,"sha256":"101c5f9c6ff0dc92705c172ed120974a409fba15460ffec508bdaf89f265c848"},
+    {"part":107,"artifact_id":9723535848,"size":100000000,"sha256":"f46ee2d7ccf0236b6045ab561a723248ed29e2a10fc2a376d720558ded571743"},
+    {"part":108,"artifact_id":9723535672,"size":100000000,"sha256":"f78bd1cb1404c35662c4eed61f1e98c7635e4f03e7f96e0f45584b50a48e5938"},
+    {"part":109,"artifact_id":9723537824,"size":100000000,"sha256":"0d2d7a1b6d760f895c1ac233a262d41430141f4d0127247484f7b71607a85265"},
+    {"part":110,"artifact_id":9723537585,"size":100000000,"sha256":"5ae20f6f30d1902fcc1f8f74ac1d9809258370d737929fa3d835df5f6c71c721"},
+    {"part":111,"artifact_id":9723539688,"size":100000000,"sha256":"ab49672d3ffb55de92063264a344a9fabd56689cc8e80c0249355f0ea61f5676"},
+    {"part":112,"artifact_id":9723538100,"size":100000000,"sha256":"d9bf8abd24b31fb8fae3224255601ede4df3aa28c93cd232dfe608187ac373df"},
+    {"part":113,"artifact_id":9723540941,"size":94518113,"sha256":"63713ec2a4ef5cde47d4ef441764c5b6bb49fb087907e473ed49ce9fc66b3974"}
+  ]
+}
