@@ -9,13 +9,24 @@ All four MP4 sources are fully represented on Google Drive as exact byte-range p
 - `выпускной клип.mp4`: 13 parts; `1,241,060,815` bytes; SHA256 `0fcadc1b53c6f90c16fe7125a07014a9e15fad0281d8c63f4b7f218c255f39cd`.
 - `Последний звонок клип.mp4`: 16 parts; `1,528,082,371` bytes; SHA256 `5594451b481999b9ff8e2e656a937d48a603ae1d65148acd2f2fb30ab7ac27cd`.
 - `Последний звонок.mp4`: 51 parts; `5,053,962,886` bytes; SHA256 `12c31327edf92c6d0489b97738807d73fc696c7ad558edc1dedf624841f82856`.
-- `выпускной.mp4`: 113 parts; `11,294,518,113` bytes; SHA256 `628bdd80894cd8296838d2011d0ed0f2ab4a3912629fec35eabe9bcabaf40ed`.
+- `выпускной.mp4`: 113 parts; `11,294,518,113` bytes; SHA256 `628bdd80894cd8296838d2011d0ed0f2ab4a3912629fec35eabe9bcabaf40ed9`.
 
 Old-Yandex total: `19,117,624,185` bytes.
 
 `выпускной.mp4` was audited as parts `001..113`; parts 001..112 are 100,000,000 bytes and part113 is 94,518,113 bytes.
 
-A local reconstruction of `Последний звонок клип.mp4` was byte-concatenated and matched the source SHA256 exactly. Current Library->Drive uploader rejects files >512 MiB, so video part folders MUST remain until a working large-file upload route is available.
+A local reconstruction of `Последний звонок клип.mp4` was byte-concatenated and matched the source SHA256 exactly.
+
+### Exact whole-file GitHub safety copies
+
+All four original MP4s have now also been independently downloaded as **whole source files** directly from the Yandex public share inside GitHub Actions, checked against the source byte size and SHA256 before upload, and stored with `actions/upload-artifact@v7` + `archive:false` as raw artifacts. Their artifact sizes and GitHub artifact digests exactly equal the original files:
+
+- `выпускной клип.mp4`: artifact `9731156804`; `1,241,060,815` bytes; digest `sha256:0fcadc1b53c6f90c16fe7125a07014a9e15fad0281d8c63f4b7f218c255f39cd`.
+- `Последний звонок клип.mp4`: artifact `9731167379`; `1,528,082,371` bytes; digest `sha256:5594451b481999b9ff8e2e656a937d48a603ae1d65148acd2f2fb30ab7ac27cd`.
+- `Последний звонок.mp4`: artifact `9731170999`; `5,053,962,886` bytes; digest `sha256:12c31327edf92c6d0489b97738807d73fc696c7ad558edc1dedf624841f82856`.
+- `выпускной.mp4`: artifact `9731207395`; `11,294,518,113` bytes; digest `sha256:628bdd80894cd8296838d2011d0ed0f2ab4a3912629fec35eabe9bcabaf40ed9`.
+
+These raw artifacts are retained for 7 days. The current GitHub connector refuses to download artifacts above 512 MiB, so they cannot yet be bridged into Drive through ChatGPT. They nevertheless provide independent whole-file integrity copies in addition to the complete Drive part sets.
 
 ## Wfolio SOHO 30.06.2026
 
@@ -52,13 +63,14 @@ Final presentation must extract the independent packs back into ordinary JPEG fi
 
 ## Current infrastructure constraints
 
-- Direct Google Drive connector is currently server-disabled in this session.
-- Files/Library Google Drive uploader works, but has a 512 MiB per-file ceiling and may impose temporary upload quota cooldowns.
-- Files/Library cannot create or delete Google Drive items in this environment.
+- Direct Google Drive connector is currently server-disabled when invoked in this session, even though discovery still exposes its actions.
+- Files/Library Google Drive uploader can create files and works for ordinary JPEGs, but has a 512 MiB per-file ceiling and may impose temporary upload quota cooldowns.
+- Files/Library cannot delete Google Drive items in this environment.
+- GitHub Actions can hold the exact whole MP4s, including the 11.29 GB source, but the GitHub connector also has a 512 MiB artifact-download ceiling.
 - Therefore no verified video transport chunks have been deleted.
 
 ## Resume point
 
-- Wfolio ordinary files: resume at archive entry 424 (`5J3B9097.jpg`) and continue through 877 using one upload stream.
+- Wfolio ordinary files: resume at archive entry 424 (`5J3B9097.jpg`) and continue through 877 using one upload stream only.
 - Then restore all 1334 Yandex JPEGs.
-- If direct Drive returns, remove documented Wfolio duplicates and use/test a large-file route for the four verified MP4 reconstructions.
+- If direct Drive returns, remove documented Wfolio duplicates and test a true large-file route for the four verified whole MP4 raw artifacts.
