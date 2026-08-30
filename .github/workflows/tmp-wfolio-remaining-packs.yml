@@ -1,0 +1,133 @@
+name: tmp-wfolio-remaining-packs
+
+on:
+  push:
+    branches:
+      - tmp/yandex-drive-transfer-20260828
+    paths:
+      - tmp-wfolio-remaining-packs-trigger.txt
+
+permissions:
+  contents: read
+
+jobs:
+  packs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Obtain fresh original Wfolio archive and build remaining restore packs
+        env:
+          BASE: https://olyashevchuk88.wfolio.pro
+          PROJECT: /disk/soho-30-06-2026-terrasa-wm28ks
+          EXPECTED_SIZE: '5584535044'
+          START_INDEX: '424'
+          TARGET_RAW_BYTES: '350000000'
+        run: |
+          set -euo pipefail
+          UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/146 Safari/537.36'
+          curl -L --fail --retry 3 -A "$UA" -c cookies.txt -b cookies.txt "$BASE$PROJECT" -o page.html
+          curl -L --fail --retry 3 -A "$UA" -c cookies.txt -b cookies.txt \
+            -H 'Turbo-Frame: modal' -H 'Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml' \
+            "$BASE$PROJECT/downloads/project" -o download-project.html
+          TOKEN=$(python - <<'PY'
+          import re, html
+          s=open('download-project.html',encoding='utf-8',errors='replace').read()
+          forms=re.findall(r'<form\b[^>]*>.*?</form>',s,re.I|re.S)
+          local=next((f for f in forms if re.search(r'<button\b[^>]*name=["\']storage["\'][^>]*value=["\']local["\']',f,re.I)),None)
+          if not local: raise SystemExit('local-download form not found')
+          m=re.search(r'<input\b[^>]*name=["\']authenticity_token["\'][^>]*value=["\']([^"\']+)',local,re.I)
+          if not m: m=re.search(r'<input\b[^>]*value=["\']([^"\']+)["\'][^>]*name=["\']authenticity_token["\']',local,re.I)
+          if not m: raise SystemExit('authenticity_token not found')
+          print(html.unescape(m.group(1)))
+          PY
+          )
+          curl -L --fail --retry 3 -A "$UA" -c cookies.txt -b cookies.txt \
+            -H "Referer: $BASE$PROJECT" \
+            -H 'Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml' \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            --data-urlencode "authenticity_token=$TOKEN" \
+            --data-urlencode 'scope=project' --data-urlencode 'folder_path=' \
+            --data-urlencode 'size=original' --data-urlencode 'cart_secure_id=' \
+            --data-urlencode 'person_id=' --data-urlencode 'storage=local' \
+            -o post-body.html "$BASE$PROJECT/downloads/project"
+          ARCHIVE=$(python - <<'PY'
+          import re,html
+          s=open('post-body.html',encoding='utf-8',errors='replace').read()
+          m=re.search(r'target=["\'](https?://[^"\']+)["\']',s,re.I)
+          if not m: raise SystemExit('archive URL not found')
+          print(html.unescape(m.group(1)))
+          PY
+          )
+          echo "ARCHIVE_URL=$ARCHIVE"
+          curl -L --fail --retry 5 --retry-delay 2 -A "$UA" "$ARCHIVE" -o wfolio.zip
+          test "$(stat -c%s wfolio.zip)" = "$EXPECTED_SIZE"
+          python - <<'PY'
+          import hashlib,json,os,shutil,zipfile
+          src='wfolio.zip'; start=int(os.environ['START_INDEX']); target=int(os.environ['TARGET_RAW_BYTES'])
+          with zipfile.ZipFile(src) as zin:
+              bad=zin.testzip()
+              if bad: raise SystemExit(f'CRC failure: {bad}')
+              infos=[i for i in zin.infolist() if not i.is_dir()]
+              if len(infos)!=877: raise SystemExit(f'expected 877, got {len(infos)}')
+              remain=infos[start-1:]
+              packs=[]; cur=[]; total=0
+              for info in remain:
+                  if cur and total + info.file_size > target:
+                      packs.append(cur); cur=[]; total=0
+                  cur.append(info); total += info.file_size
+              if cur: packs.append(cur)
+              manifest=[]
+              for pno,group in enumerate(packs,1):
+                  out=f'wfolio-remain-pack{pno:03d}.zip'
+                  rows=[]
+                  with zipfile.ZipFile(out,'w',compression=zipfile.ZIP_STORED,allowZip64=True) as zout:
+                      for info in group:
+                          h=hashlib.sha256()
+                          zi=zipfile.ZipInfo(info.filename, date_time=info.date_time)
+                          zi.compress_type=zipfile.ZIP_STORED
+                          zi.external_attr=info.external_attr
+                          with zin.open(info) as r, zout.open(zi,'w',force_zip64=True) as w:
+                              while True:
+                                  b=r.read(8*1024*1024)
+                                  if not b: break
+                                  h.update(b); w.write(b)
+                          rows.append({'index':infos.index(info)+1,'name':info.filename,'size':info.file_size,'crc32':f'{info.CRC:08x}','sha256':h.hexdigest()})
+                  manifest.append({'pack':pno,'file':out,'count':len(rows),'raw_bytes':sum(r['size'] for r in rows),'zip_bytes':os.path.getsize(out),'first_index':rows[0]['index'],'last_index':rows[-1]['index'],'files':rows})
+              open('wfolio-remaining-packs.json','w',encoding='utf-8').write(json.dumps(manifest,ensure_ascii=False,indent=2))
+              print('PACK_COUNT',len(manifest),'FILE_COUNT',sum(x['count'] for x in manifest),'FIRST',manifest[0]['first_index'],'LAST',manifest[-1]['last_index'])
+              for x in manifest: print('PACK',x['pack'],x['count'],x['raw_bytes'],x['zip_bytes'],x['first_index'],x['last_index'])
+          PY
+      - name: Upload pack 001
+        uses: actions/upload-artifact@v7
+        with: {name: wfolio-remain-pack001, path: wfolio-remain-pack001.zip, archive: false, retention-days: 7, if-no-files-found: error}
+      - name: Upload pack 002
+        uses: actions/upload-artifact@v7
+        with: {name: wfolio-remain-pack002, path: wfolio-remain-pack002.zip, archive: false, retention-days: 7, if-no-files-found: error}
+      - name: Upload pack 003
+        uses: actions/upload-artifact@v7
+        with: {name: wfolio-remain-pack003, path: wfolio-remain-pack003.zip, archive: false, retention-days: 7, if-no-files-found: error}
+      - name: Upload pack 004
+        uses: actions/upload-artifact@v7
+        with: {name: wfolio-remain-pack004, path: wfolio-remain-pack004.zip, archive: false, retention-days: 7, if-no-files-found: error}
+      - name: Upload pack 005
+        uses: actions/upload-artifact@v7
+        with: {name: wfolio-remain-pack005, path: wfolio-remain-pack005.zip, archive: false, retention-days: 7, if-no-files-found: error}
+      - name: Upload pack 006
+        uses: actions/upload-artifact@v7
+        with: {name: wfolio-remain-pack006, path: wfolio-remain-pack006.zip, archive: false, retention-days: 7, if-no-files-found: error}
+      - name: Upload pack 007
+        uses: actions/upload-artifact@v7
+        with: {name: wfolio-remain-pack007, path: wfolio-remain-pack007.zip, archive: false, retention-days: 7, if-no-files-found: error}
+      - name: Upload pack 008
+        uses: actions/upload-artifact@v7
+        with: {name: wfolio-remain-pack008, path: wfolio-remain-pack008.zip, archive: false, retention-days: 7, if-no-files-found: ignore}
+      - name: Upload pack 009
+        uses: actions/upload-artifact@v7
+        with: {name: wfolio-remain-pack009, path: wfolio-remain-pack009.zip, archive: false, retention-days: 7, if-no-files-found: ignore}
+      - name: Upload pack 010
+        uses: actions/upload-artifact@v7
+        with: {name: wfolio-remain-pack010, path: wfolio-remain-pack010.zip, archive: false, retention-days: 7, if-no-files-found: ignore}
+      - name: Upload pack manifest
+        uses: actions/upload-artifact@v7
+        with: {name: wfolio-remaining-packs-manifest, path: wfolio-remaining-packs.json, archive: false, retention-days: 7, if-no-files-found: error}
