@@ -1,0 +1,50 @@
+name: tmp-wfolio-manifest-extract
+on:
+  push:
+    paths:
+      - 'tmp-wfolio-manifest-extract-trigger.txt'
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: read
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download existing verified manifest artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p old-manifest
+          gh run download 33307597350 -R "$GITHUB_REPOSITORY" -n wfolio-source-manifest -D old-manifest
+          test -s old-manifest/wfolio-summary.json
+          test -s old-manifest/wfolio-files.jsonl
+          python3 - <<'PY'
+          import json
+          s=json.load(open('old-manifest/wfolio-summary.json',encoding='utf-8'))
+          assert s['file_count']==877
+          assert s['archive_size']==5584535044
+          assert s['crc_test']=='PASS'
+          print(json.dumps(s,ensure_ascii=False,indent=2))
+          rows=[json.loads(x) for x in open('old-manifest/wfolio-files.jsonl',encoding='utf-8') if x.strip()]
+          assert len(rows)==877
+          assert rows[422]['name']==s['entry_423']
+          assert rows[423]['name']==s['entry_424']
+          print('manifest_rows',len(rows),'source_bytes',sum(x['size'] for x in rows))
+          PY
+      - name: Upload summary raw
+        uses: actions/upload-artifact@v7
+        with:
+          name: wfolio-source-summary-raw
+          path: old-manifest/wfolio-summary.json
+          archive: false
+          retention-days: 30
+      - name: Upload file manifest raw
+        uses: actions/upload-artifact@v7
+        with:
+          name: wfolio-source-files-raw
+          path: old-manifest/wfolio-files.jsonl
+          archive: false
+          retention-days: 30
