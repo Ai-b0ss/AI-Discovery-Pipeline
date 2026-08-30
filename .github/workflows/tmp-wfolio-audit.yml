@@ -1,0 +1,60 @@
+name: tmp-wfolio-audit
+on:
+  push:
+    paths:
+      - 'tmp-wfolio-audit-trigger.txt'
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download exact Wfolio archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 5 --retry-delay 3 --output wfolio.zip 'https://zip.wfolio.ru/gateway/mod_zip/disk/download/aGEgzHUhQe'
+          test "$(stat -c%s wfolio.zip)" = "5584535044"
+          sha256sum wfolio.zip | tee wfolio-archive.sha256
+      - name: Build full per-file manifest and verify CRC
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import csv, hashlib, json, zipfile
+          p='wfolio.zip'
+          with zipfile.ZipFile(p) as z:
+              bad=z.testzip()
+              if bad is not None:
+                  raise SystemExit(f'CRC failure: {bad}')
+              rows=[]
+              for i, info in enumerate(z.infolist(),1):
+                  if info.is_dir():
+                      continue
+                  rows.append({
+                      'index': len(rows)+1,
+                      'name': info.filename,
+                      'size': info.file_size,
+                      'compressed_size': info.compress_size,
+                      'crc32': f'{info.CRC:08x}',
+                      'compress_type': info.compress_type,
+                  })
+              if len(rows) != 877:
+                  raise SystemExit(f'expected 877 files, got {len(rows)}')
+              with open('wfolio-files.json','w',encoding='utf-8') as f:
+                  json.dump(rows,f,ensure_ascii=False,indent=2)
+              with open('wfolio-files.csv','w',encoding='utf-8',newline='') as f:
+                  w=csv.DictWriter(f,fieldnames=rows[0].keys()); w.writeheader(); w.writerows(rows)
+              print('files',len(rows),'bytes',sum(r['size'] for r in rows))
+          PY
+      - name: Upload audit outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: wfolio-audit
+          path: |
+            wfolio-archive.sha256
+            wfolio-files.json
+            wfolio-files.csv
+          retention-days: 7
