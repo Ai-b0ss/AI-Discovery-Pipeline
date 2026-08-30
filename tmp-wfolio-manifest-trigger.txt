@@ -1,1 +1,1 @@
-2026-08-30 manifest pass 1
+2026-08-30 manifest pass 2 fresh-url
