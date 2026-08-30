@@ -1,0 +1,83 @@
+name: tmp-transfer-source-hashes
+
+on:
+  push:
+    branches:
+      - tmp/yandex-drive-transfer-20260828
+    paths:
+      - tmp-source-hash-trigger.txt
+
+permissions:
+  contents: read
+
+jobs:
+  yandex:
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include:
+          - key: graduation_clip
+            path: /Выпускной готовое/выпускной клип.mp4
+            expected: 1241060815
+          - key: graduation_full
+            path: /Выпускной готовое/выпускной.mp4
+            expected: 11294518113
+          - key: bell_clip
+            path: /Последний звонок готовое/Последний звонок клип.mp4
+            expected: 1528082371
+          - key: bell_full
+            path: /Последний звонок готовое/Последний звонок.mp4
+            expected: 5053962886
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Stream source and calculate SHA256
+        env:
+          SOURCE_PATH: ${{ matrix.path }}
+          EXPECTED_SIZE: ${{ matrix.expected }}
+          KEY: ${{ matrix.key }}
+        run: |
+          python - <<'PY'
+          import hashlib,json,os,time,urllib.parse,urllib.request
+          public='https://disk.yandex.ru/d/GedxLT7sVZldWw'
+          path=os.environ['SOURCE_PATH']; expected=int(os.environ['EXPECTED_SIZE']); key=os.environ['KEY']
+          api='https://cloud-api.yandex.net/v1/disk/public/resources/download?'+urllib.parse.urlencode({'public_key':public,'path':path})
+          for attempt in range(6):
+              try:
+                  with urllib.request.urlopen(urllib.request.Request(api,headers={'User-Agent':'Mozilla/5.0'}),timeout=60) as r:
+                      href=json.load(r)['href']
+                  h=hashlib.sha256(); n=0
+                  with urllib.request.urlopen(urllib.request.Request(href,headers={'User-Agent':'Mozilla/5.0','Accept-Encoding':'identity'}),timeout=600) as r:
+                      while True:
+                          b=r.read(16*1024*1024)
+                          if not b: break
+                          h.update(b); n += len(b)
+                  if n != expected: raise RuntimeError(f'size mismatch expected={expected} actual={n}')
+                  print(f'SOURCE_SHA256 key={key} bytes={n} sha256={h.hexdigest()} path={path}')
+                  break
+              except Exception:
+                  if attempt == 5: raise
+                  time.sleep(min(60,2**attempt))
+          PY
+
+  wfolio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Stream Wfolio archive and calculate SHA256
+        run: |
+          python - <<'PY'
+          import hashlib,urllib.request
+          url='https://zip.wfolio.ru/gateway/mod_zip/disk/download/aGEgzHUhQe'
+          expected=5584535044
+          h=hashlib.sha256(); n=0
+          req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0','Accept-Encoding':'identity'})
+          with urllib.request.urlopen(req,timeout=600) as r:
+              while True:
+                  b=r.read(16*1024*1024)
+                  if not b: break
+                  h.update(b); n+=len(b)
+          if n != expected: raise RuntimeError(f'size mismatch expected={expected} actual={n}')
+          print(f'SOURCE_SHA256 key=wfolio bytes={n} sha256={h.hexdigest()}')
+          PY
