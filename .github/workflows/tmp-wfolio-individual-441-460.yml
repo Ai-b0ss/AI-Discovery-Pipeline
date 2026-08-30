@@ -1,0 +1,100 @@
+name: tmp-wfolio-individual-441-460
+
+on:
+  push:
+    branches: [tmp/yandex-drive-transfer-20260828]
+    paths: [tmp-wfolio-individual-441-460-trigger.txt]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download restore pack and extract verified JPEGs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p dl out
+          gh run download 33309118687 -R "$GITHUB_REPOSITORY" -n 'wfolio-remain-pack001.zip' -D dl
+          PACK=$(find dl -type f -name '*.zip' | head -n1)
+          test -n "$PACK"
+          python - "$PACK" <<'PY'
+          import sys,zipfile,hashlib,os
+          pack=sys.argv[1]
+          want={
+          '5J3B9134.jpg':'a21c023e3f3d87db6c6c7ab32328f1f69f7be149f2cba1fe8323cdfb32124328',
+          '5J3B9135.jpg':'5cf6b5142376f842a2112967b25f105660bff834f14b9cf53ba5de5eb355c226',
+          '5J3B9136.jpg':'033e1b3ebd1ea1c10a89df12c6126751b894dffba2aa1c5e669bbc59099e939e',
+          '5J3B9138.jpg':'977e263085e9f4e520655dae3987d4e72576e8ff3b2f0e72c4de97357c12c5db',
+          '5J3B9139.jpg':'911daa6c9f230ec1561d623f246dbdf2bcda7a04f5da4d2c35c23333b3e2b9a6',
+          '5J3B9140.jpg':'9eba859a3e8cf83d6b59701979606aa88488953ba32070c9505ef97c7a8f1e11',
+          '5J3B9141.jpg':'9a1ff099c9ef4d55f966fbf390cf7f219ba5e7cbf5d3926317ca21bf3c45cf19',
+          '5J3B9142.jpg':'71ece5ab892ca4a51b3e215ccb8d2981da3d2ca563f699bca47a5bb588b085e9',
+          '5J3B9143.jpg':'8cc3a3bc95ff8bfde93586105cb41e62788f786b36741d80ddc37f1c0d7f80ad',
+          '5J3B9146.jpg':'79f5b082abbd2b15d9abad19b7cd31bc3e273450cb380983b6bf8f581ce7be1e',
+          '5J3B9147.jpg':'15bc9c5b11fb94d1ac93edb2b57b6f4f293574180f3bf788d72142122ff51ce5',
+          '5J3B9148.jpg':'db7dc1586f757daeebcfa87655ebcf0e6bd60aa8e75a672e27aef82dc49052b6',
+          '5J3B9150.jpg':'e6140161efc7d97ba8a7951219bd4c60f751ea88b7bdde0ea40a23908a335813',
+          '5J3B9151.jpg':'49993ebee3a77cacb740e6829ddf9b4e74d4924a7efba36760524d702403d73f',
+          '5J3B9152.jpg':'bb3f654b49c8fd5b4ce6449d727d29de98da275b109b7dc75cf7efd9c3ba787e',
+          '5J3B9154.jpg':'e81c48afa9bb11b34b1ba5b08ae9d60be4d0afb8037e05e99aa5e514688e1437',
+          '5J3B9155.jpg':'8d12e5ab422794856c1a935d3f46c0936492b0e72e7ed014889f9eaf2821756c',
+          '5J3B9156.jpg':'e69bc19db9034bfb698c806c5f7aba0783eacfad813ff525cfb08340658ce92e',
+          '5J3B9158.jpg':'6268ac52e201dbc2137d56d4ec69e9325bb558a98c1bb0114fb00e6dd34f0835',
+          '5J3B9162.jpg':'d0c59bb78ea925152d67c726d3c011f7053cd2bff0e4390831e534572ef582f5'}
+          with zipfile.ZipFile(pack) as z:
+              bybase={os.path.basename(i.filename):i for i in z.infolist() if not i.is_dir()}
+              for name,sha in want.items():
+                  info=bybase[name]
+                  data=z.read(info)
+                  got=hashlib.sha256(data).hexdigest()
+                  if got!=sha: raise SystemExit(f'SHA mismatch {name}: {got}')
+                  open('out/'+name,'wb').write(data)
+                  print('OK',name,len(data),got)
+          PY
+      - uses: actions/upload-artifact@v7
+        with: {name: 'wf0441-5J3B9134.jpg', path: 'out/5J3B9134.jpg', archive: false, retention-days: 7}
+      - uses: actions/upload-artifact@v7
+        with: {name: 'wf0442-5J3B9135.jpg', path: 'out/5J3B9135.jpg', archive: false, retention-days: 7}
+      - uses: actions/upload-artifact@v7
+        with: {name: 'wf0443-5J3B9136.jpg', path: 'out/5J3B9136.jpg', archive: false, retention-days: 7}
+      - uses: actions/upload-artifact@v7
+        with: {name: 'wf0444-5J3B9138.jpg', path: 'out/5J3B9138.jpg', archive: false, retention-days: 7}
+      - uses: actions/upload-artifact@v7
+        with: {name: 'wf0445-5J3B9139.jpg', path: 'out/5J3B9139.jpg', archive: false, retention-days: 7}
+      - uses: actions/upload-artifact@v7
+        with: {name: 'wf0446-5J3B9140.jpg', path: 'out/5J3B9140.jpg', archive: false, retention-days: 7}
+      - uses: actions/upload-artifact@v7
+        with: {name: 'wf0447-5J3B9141.jpg', path: 'out/5J3B9141.jpg', archive: false, retention-days: 7}
+      - uses: actions/upload-artifact@v7
+        with: {name: 'wf0448-5J3B9142.jpg', path: 'out/5J3B9142.jpg', archive: false, retention-days: 7}
+      - uses: actions/upload-artifact@v7
+        with: {name: 'wf0449-5J3B9143.jpg', path: 'out/5J3B9143.jpg', archive: false, retention-days: 7}
+      - uses: actions/upload-artifact@v7
+        with: {name: 'wf0450-5J3B9146.jpg', path: 'out/5J3B9146.jpg', archive: false, retention-days: 7}
+      - uses: actions/upload-artifact@v7
+        with: {name: 'wf0451-5J3B9147.jpg', path: 'out/5J3B9147.jpg', archive: false, retention-days: 7}
+      - uses: actions/upload-artifact@v7
+        with: {name: 'wf0452-5J3B9148.jpg', path: 'out/5J3B9148.jpg', archive: false, retention-days: 7}
+      - uses: actions/upload-artifact@v7
+        with: {name: 'wf0453-5J3B9150.jpg', path: 'out/5J3B9150.jpg', archive: false, retention-days: 7}
+      - uses: actions/upload-artifact@v7
+        with: {name: 'wf0454-5J3B9151.jpg', path: 'out/5J3B9151.jpg', archive: false, retention-days: 7}
+      - uses: actions/upload-artifact@v7
+        with: {name: 'wf0455-5J3B9152.jpg', path: 'out/5J3B9152.jpg', archive: false, retention-days: 7}
+      - uses: actions/upload-artifact@v7
+        with: {name: 'wf0456-5J3B9154.jpg', path: 'out/5J3B9154.jpg', archive: false, retention-days: 7}
+      - uses: actions/upload-artifact@v7
+        with: {name: 'wf0457-5J3B9155.jpg', path: 'out/5J3B9155.jpg', archive: false, retention-days: 7}
+      - uses: actions/upload-artifact@v7
+        with: {name: 'wf0458-5J3B9156.jpg', path: 'out/5J3B9156.jpg', archive: false, retention-days: 7}
+      - uses: actions/upload-artifact@v7
+        with: {name: 'wf0459-5J3B9158.jpg', path: 'out/5J3B9158.jpg', archive: false, retention-days: 7}
+      - uses: actions/upload-artifact@v7
+        with: {name: 'wf0460-5J3B9162.jpg', path: 'out/5J3B9162.jpg', archive: false, retention-days: 7}
