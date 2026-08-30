@@ -1,0 +1,115 @@
+name: tmp-wfolio-individual-bridge
+
+on:
+  push:
+    branches: [tmp/yandex-drive-transfer-20260828]
+    paths: [tmp-wfolio-individual-control.json]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bridge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - id: extract
+        name: Download restore packs and extract verified slots
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: '33309118687'
+        run: |
+          set -euo pipefail
+          mkdir -p dl out
+          jq -r '.[].pack' tmp-wfolio-individual-control.json | sort -u | while read -r pack; do
+            mkdir -p "dl/$pack"
+            gh run download "$RUN_ID" -R "$GITHUB_REPOSITORY" -n "$pack" -D "dl/$pack"
+          done
+          python - <<'PY'
+          import json,zipfile,hashlib,os
+          items=json.load(open('tmp-wfolio-individual-control.json',encoding='utf-8'))
+          if not (1 <= len(items) <= 20): raise SystemExit('control must contain 1..20 items')
+          outenv=os.environ['GITHUB_OUTPUT']
+          with open(outenv,'a',encoding='utf-8') as gh:
+              for n,item in enumerate(items,1):
+                  pack=item['pack']; base=item['name']; want=item['sha256']; idx=int(item['index'])
+                  files=[]
+                  for root,_,names in os.walk('dl/'+pack):
+                      for fn in names:
+                          if fn.endswith('.zip'): files.append(os.path.join(root,fn))
+                  if len(files)!=1: raise SystemExit(f'expected one zip for {pack}, got {files}')
+                  with zipfile.ZipFile(files[0]) as z:
+                      hits=[i for i in z.infolist() if not i.is_dir() and os.path.basename(i.filename)==base]
+                      if len(hits)!=1: raise SystemExit(f'{base}: matches={len(hits)}')
+                      data=z.read(hits[0])
+                  got=hashlib.sha256(data).hexdigest()
+                  if got!=want: raise SystemExit(f'SHA mismatch {base}: {got} != {want}')
+                  path=f'out/{base}'
+                  open(path,'wb').write(data)
+                  slot=f'{n:02d}'
+                  gh.write(f'name{slot}=wf{idx:04d}-{base}\n')
+                  gh.write(f'path{slot}={path}\n')
+                  print('OK',idx,base,len(data),got)
+          PY
+      - if: steps.extract.outputs.name01 != ''
+        uses: actions/upload-artifact@v7
+        with: {name: '${{ steps.extract.outputs.name01 }}', path: '${{ steps.extract.outputs.path01 }}', archive: false, retention-days: 7}
+      - if: steps.extract.outputs.name02 != ''
+        uses: actions/upload-artifact@v7
+        with: {name: '${{ steps.extract.outputs.name02 }}', path: '${{ steps.extract.outputs.path02 }}', archive: false, retention-days: 7}
+      - if: steps.extract.outputs.name03 != ''
+        uses: actions/upload-artifact@v7
+        with: {name: '${{ steps.extract.outputs.name03 }}', path: '${{ steps.extract.outputs.path03 }}', archive: false, retention-days: 7}
+      - if: steps.extract.outputs.name04 != ''
+        uses: actions/upload-artifact@v7
+        with: {name: '${{ steps.extract.outputs.name04 }}', path: '${{ steps.extract.outputs.path04 }}', archive: false, retention-days: 7}
+      - if: steps.extract.outputs.name05 != ''
+        uses: actions/upload-artifact@v7
+        with: {name: '${{ steps.extract.outputs.name05 }}', path: '${{ steps.extract.outputs.path05 }}', archive: false, retention-days: 7}
+      - if: steps.extract.outputs.name06 != ''
+        uses: actions/upload-artifact@v7
+        with: {name: '${{ steps.extract.outputs.name06 }}', path: '${{ steps.extract.outputs.path06 }}', archive: false, retention-days: 7}
+      - if: steps.extract.outputs.name07 != ''
+        uses: actions/upload-artifact@v7
+        with: {name: '${{ steps.extract.outputs.name07 }}', path: '${{ steps.extract.outputs.path07 }}', archive: false, retention-days: 7}
+      - if: steps.extract.outputs.name08 != ''
+        uses: actions/upload-artifact@v7
+        with: {name: '${{ steps.extract.outputs.name08 }}', path: '${{ steps.extract.outputs.path08 }}', archive: false, retention-days: 7}
+      - if: steps.extract.outputs.name09 != ''
+        uses: actions/upload-artifact@v7
+        with: {name: '${{ steps.extract.outputs.name09 }}', path: '${{ steps.extract.outputs.path09 }}', archive: false, retention-days: 7}
+      - if: steps.extract.outputs.name10 != ''
+        uses: actions/upload-artifact@v7
+        with: {name: '${{ steps.extract.outputs.name10 }}', path: '${{ steps.extract.outputs.path10 }}', archive: false, retention-days: 7}
+      - if: steps.extract.outputs.name11 != ''
+        uses: actions/upload-artifact@v7
+        with: {name: '${{ steps.extract.outputs.name11 }}', path: '${{ steps.extract.outputs.path11 }}', archive: false, retention-days: 7}
+      - if: steps.extract.outputs.name12 != ''
+        uses: actions/upload-artifact@v7
+        with: {name: '${{ steps.extract.outputs.name12 }}', path: '${{ steps.extract.outputs.path12 }}', archive: false, retention-days: 7}
+      - if: steps.extract.outputs.name13 != ''
+        uses: actions/upload-artifact@v7
+        with: {name: '${{ steps.extract.outputs.name13 }}', path: '${{ steps.extract.outputs.path13 }}', archive: false, retention-days: 7}
+      - if: steps.extract.outputs.name14 != ''
+        uses: actions/upload-artifact@v7
+        with: {name: '${{ steps.extract.outputs.name14 }}', path: '${{ steps.extract.outputs.path14 }}', archive: false, retention-days: 7}
+      - if: steps.extract.outputs.name15 != ''
+        uses: actions/upload-artifact@v7
+        with: {name: '${{ steps.extract.outputs.name15 }}', path: '${{ steps.extract.outputs.path15 }}', archive: false, retention-days: 7}
+      - if: steps.extract.outputs.name16 != ''
+        uses: actions/upload-artifact@v7
+        with: {name: '${{ steps.extract.outputs.name16 }}', path: '${{ steps.extract.outputs.path16 }}', archive: false, retention-days: 7}
+      - if: steps.extract.outputs.name17 != ''
+        uses: actions/upload-artifact@v7
+        with: {name: '${{ steps.extract.outputs.name17 }}', path: '${{ steps.extract.outputs.path17 }}', archive: false, retention-days: 7}
+      - if: steps.extract.outputs.name18 != ''
+        uses: actions/upload-artifact@v7
+        with: {name: '${{ steps.extract.outputs.name18 }}', path: '${{ steps.extract.outputs.path18 }}', archive: false, retention-days: 7}
+      - if: steps.extract.outputs.name19 != ''
+        uses: actions/upload-artifact@v7
+        with: {name: '${{ steps.extract.outputs.name19 }}', path: '${{ steps.extract.outputs.path19 }}', archive: false, retention-days: 7}
+      - if: steps.extract.outputs.name20 != ''
+        uses: actions/upload-artifact@v7
+        with: {name: '${{ steps.extract.outputs.name20 }}', path: '${{ steps.extract.outputs.path20 }}', archive: false, retention-days: 7}
