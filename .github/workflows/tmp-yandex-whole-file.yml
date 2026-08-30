@@ -1,0 +1,39 @@
+name: tmp-yandex-whole-file
+on:
+  push:
+    paths:
+      - 'tmp-yandex-whole-control.json'
+  workflow_dispatch:
+
+jobs:
+  fetch-whole:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and verify exact source file
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, urllib.parse, urllib.request
+          c=json.load(open('tmp-yandex-whole-control.json',encoding='utf-8'))
+          q=urllib.parse.urlencode({'public_key':c['public_key'],'path':c['path']})
+          with urllib.request.urlopen('https://cloud-api.yandex.net/v1/disk/public/resources/download?'+q) as r:
+              href=json.load(r)['href']
+          open('signed-url.txt','w').write(href)
+          PY
+          URL="$(cat signed-url.txt)"
+          NAME="$(python3 -c "import json;print(json.load(open('tmp-yandex-whole-control.json'))['target_name'])")"
+          SIZE="$(python3 -c "import json;print(json.load(open('tmp-yandex-whole-control.json'))['expected_size'])")"
+          SHA="$(python3 -c "import json;print(json.load(open('tmp-yandex-whole-control.json'))['sha256'])")"
+          curl -fL --retry 8 --retry-delay 3 --output "$NAME" "$URL"
+          test "$(stat -c%s "$NAME")" = "$SIZE"
+          echo "$SHA  $NAME" | sha256sum -c -
+      - name: Upload exact whole source file
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-whole-file
+          path: "${{ fromJSON(hashFiles('tmp-yandex-whole-control.json') != '' && '{}') }}"
+          retention-days: 7
+          compression-level: 0
