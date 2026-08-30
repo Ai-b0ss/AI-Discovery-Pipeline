@@ -6,13 +6,13 @@ on:
   workflow_dispatch:
 permissions:
   actions: read
-  contents: read
+  contents: write
 jobs:
   extract:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Download existing verified manifest artifact
+      - name: Download and verify existing manifest artifact
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -27,13 +27,26 @@ jobs:
           assert s['file_count']==877
           assert s['archive_size']==5584535044
           assert s['crc_test']=='PASS'
-          print(json.dumps(s,ensure_ascii=False,indent=2))
           rows=[json.loads(x) for x in open('old-manifest/wfolio-files.jsonl',encoding='utf-8') if x.strip()]
           assert len(rows)==877
           assert rows[422]['name']==s['entry_423']
           assert rows[423]['name']==s['entry_424']
-          print('manifest_rows',len(rows),'source_bytes',sum(x['size'] for x in rows))
+          assert sum(x['size'] for x in rows)==s['uncompressed_total']
+          print(json.dumps(s,ensure_ascii=False,indent=2))
           PY
+      - name: Persist canonical Wfolio manifests in temp branch
+        run: |
+          set -euo pipefail
+          mkdir -p tmp-manifests/wfolio
+          cp old-manifest/wfolio-summary.json tmp-manifests/wfolio/summary.json
+          cp old-manifest/wfolio-files.jsonl tmp-manifests/wfolio/files.jsonl
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tmp-manifests/wfolio/summary.json tmp-manifests/wfolio/files.jsonl
+          if ! git diff --cached --quiet; then
+            git commit -m 'checkpoint: persist verified Wfolio source manifest'
+            git push
+          fi
       - name: Upload summary raw
         uses: actions/upload-artifact@v7
         with:
