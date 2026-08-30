@@ -1,0 +1,56 @@
+name: tmp-yandex-photo-manifest
+on:
+  push:
+    paths:
+      - 'tmp-yandex-photo-manifest-trigger.txt'
+  workflow_dispatch:
+
+jobs:
+  manifest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build canonical public-share inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import csv, json, urllib.parse, urllib.request
+          PUBLIC='https://disk.yandex.ru/d/W4ZzS8wAMv8RlA'
+          API='https://cloud-api.yandex.net/v1/disk/public/resources'
+          roots=['/ВСЕ','/ИНДИВИДУАЛЬНЫЕ 1']
+          rows=[]
+          for root in roots:
+              offset=0
+              while True:
+                  params={'public_key':PUBLIC,'path':root,'limit':1000,'offset':offset,'fields':'name,path,type,size,mime_type,md5,sha256,_embedded.items.name,_embedded.items.path,_embedded.items.type,_embedded.items.size,_embedded.items.mime_type,_embedded.items.md5,_embedded.items.sha256,_embedded.total'}
+                  url=API+'?'+urllib.parse.urlencode(params)
+                  with urllib.request.urlopen(url) as r: data=json.load(r)
+                  emb=data.get('_embedded',{})
+                  items=emb.get('items',[])
+                  for x in items:
+                      if x.get('type')!='file': continue
+                      rows.append({'folder':root,'name':x.get('name'),'path':x.get('path'),'size':x.get('size'),'mime_type':x.get('mime_type'),'md5':x.get('md5'),'sha256':x.get('sha256')})
+                  offset += len(items)
+                  if not items or offset >= emb.get('total',offset): break
+          rows.sort(key=lambda r:(r['folder'],r['name']))
+          counts={r:sum(1 for x in rows if x['folder']==r) for r in roots}
+          sizes={r:sum(int(x['size']) for x in rows if x['folder']==r) for r in roots}
+          assert counts['/ВСЕ']==931, counts
+          assert counts['/ИНДИВИДУАЛЬНЫЕ 1']==403, counts
+          assert sizes['/ВСЕ']==6912860320, sizes
+          assert sizes['/ИНДИВИДУАЛЬНЫЕ 1']==2902530815, sizes
+          with open('yandex-june30-canonical.json','w',encoding='utf-8') as f: json.dump(rows,f,ensure_ascii=False,indent=2)
+          with open('yandex-june30-canonical.csv','w',encoding='utf-8',newline='') as f:
+              w=csv.DictWriter(f,fieldnames=['folder','name','path','size','mime_type','md5','sha256']); w.writeheader(); w.writerows(rows)
+          print(json.dumps({'counts':counts,'sizes':sizes,'total_files':len(rows),'total_size':sum(sizes.values())},ensure_ascii=False))
+          PY
+      - name: Upload manifests
+        uses: actions/upload-artifact@v7
+        with:
+          name: yandex-june30-canonical-manifest
+          path: |
+            yandex-june30-canonical.json
+            yandex-june30-canonical.csv
+          retention-days: 30
