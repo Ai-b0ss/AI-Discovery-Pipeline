@@ -15,7 +15,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl -fL --retry 5 --retry-delay 3 --output wfolio.zip 'https://zip.wfolio.ru/gateway/mod_zip/disk/download/aGEgzHUhQe'
+          PAGE='https://olyashevchuk88.wfolio.pro/disk/soho-30-06-2026-terrasa-wm28ks'
+          ZIP='https://zip.wfolio.ru/gateway/mod_zip/disk/download/aGEgzHUhQe'
+          UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36'
+          curl -fsSL -A "$UA" -c cookies.txt -o page.html "$PAGE"
+          curl -fL --retry 5 --retry-delay 3 -A "$UA" -e "$PAGE" -b cookies.txt --output wfolio.zip "$ZIP"
           test "$(stat -c%s wfolio.zip)" = "5584535044"
           sha256sum wfolio.zip | tee wfolio-archive.sha256
       - name: Build full per-file manifest and verify CRC
@@ -23,28 +27,20 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import csv, hashlib, json, zipfile
+          import csv, json, zipfile
           p='wfolio.zip'
           with zipfile.ZipFile(p) as z:
               bad=z.testzip()
               if bad is not None:
                   raise SystemExit(f'CRC failure: {bad}')
               rows=[]
-              for i, info in enumerate(z.infolist(),1):
+              for info in z.infolist():
                   if info.is_dir():
                       continue
-                  rows.append({
-                      'index': len(rows)+1,
-                      'name': info.filename,
-                      'size': info.file_size,
-                      'compressed_size': info.compress_size,
-                      'crc32': f'{info.CRC:08x}',
-                      'compress_type': info.compress_type,
-                  })
+                  rows.append({'index':len(rows)+1,'name':info.filename,'size':info.file_size,'compressed_size':info.compress_size,'crc32':f'{info.CRC:08x}','compress_type':info.compress_type})
               if len(rows) != 877:
                   raise SystemExit(f'expected 877 files, got {len(rows)}')
-              with open('wfolio-files.json','w',encoding='utf-8') as f:
-                  json.dump(rows,f,ensure_ascii=False,indent=2)
+              with open('wfolio-files.json','w',encoding='utf-8') as f: json.dump(rows,f,ensure_ascii=False,indent=2)
               with open('wfolio-files.csv','w',encoding='utf-8',newline='') as f:
                   w=csv.DictWriter(f,fieldnames=rows[0].keys()); w.writeheader(); w.writerows(rows)
               print('files',len(rows),'bytes',sum(r['size'] for r in rows))
