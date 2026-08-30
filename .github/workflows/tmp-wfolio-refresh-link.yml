@@ -1,0 +1,41 @@
+name: tmp-wfolio-refresh-link
+
+on:
+  push:
+    branches:
+      - tmp/yandex-drive-transfer-20260828
+    paths:
+      - tmp-wfolio-refresh-trigger.txt
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Inspect public Wfolio page and derive current archive link
+        run: |
+          python - <<'PY'
+          import re, urllib.request, html
+          page='https://olyashevchuk88.wfolio.pro/disk/soho-30-06-2026-terrasa-wm28ks'
+          req=urllib.request.Request(page,headers={'User-Agent':'Mozilla/5.0'})
+          with urllib.request.urlopen(req,timeout=60) as r:
+              raw=r.read().decode('utf-8','replace')
+              print('PAGE_STATUS',getattr(r,'status',None),'BYTES',len(raw))
+          decoded=html.unescape(raw).replace('\\/','/')
+          pats=[
+              r'https://zip\.wfolio\.ru[^\"\'<>\\s]+',
+              r'https?://[^\"\'<>\\s]+/gateway/mod_zip/[^\"\'<>\\s]+',
+              r'/gateway/mod_zip/[^\"\'<>\\s]+'
+          ]
+          found=[]
+          for pat in pats:
+              found += re.findall(pat,decoded)
+          for u in dict.fromkeys(found): print('CANDIDATE',u)
+          for needle in ['mod_zip','download','zip.wfolio','aGEgzHUhQe']:
+              print('NEEDLE',needle,'COUNT',decoded.count(needle))
+              pos=decoded.find(needle)
+              if pos>=0: print(decoded[max(0,pos-300):pos+500])
+          PY
