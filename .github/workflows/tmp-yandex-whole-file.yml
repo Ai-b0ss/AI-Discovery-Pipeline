@@ -24,16 +24,18 @@ jobs:
           open('signed-url.txt','w').write(href)
           PY
           URL="$(cat signed-url.txt)"
-          NAME="$(python3 -c "import json;print(json.load(open('tmp-yandex-whole-control.json'))['target_name'])")"
           SIZE="$(python3 -c "import json;print(json.load(open('tmp-yandex-whole-control.json'))['expected_size'])")"
           SHA="$(python3 -c "import json;print(json.load(open('tmp-yandex-whole-control.json'))['sha256'])")"
-          curl -fL --retry 8 --retry-delay 3 --output "$NAME" "$URL"
-          test "$(stat -c%s "$NAME")" = "$SIZE"
-          echo "$SHA  $NAME" | sha256sum -c -
+          curl -fL --retry 8 --retry-delay 3 --output whole.bin "$URL"
+          test "$(stat -c%s whole.bin)" = "$SIZE"
+          echo "$SHA  whole.bin" | sha256sum -c -
+          cp tmp-yandex-whole-control.json whole-file-metadata.json
       - name: Upload exact whole source file
         uses: actions/upload-artifact@v4
         with:
           name: final-whole-file
-          path: "${{ fromJSON(hashFiles('tmp-yandex-whole-control.json') != '' && '{}') }}"
+          path: |
+            whole.bin
+            whole-file-metadata.json
           retention-days: 7
           compression-level: 0
