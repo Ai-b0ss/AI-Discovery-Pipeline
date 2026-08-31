@@ -1,0 +1,48 @@
+name: tmp-misis-310826
+on:
+  push:
+    paths:
+      - '.github/workflows/tmp-misis-310826.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  parse:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch and parse official MISIS XLS
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -q xlrd
+          curl -fL --retry 3 --retry-delay 2 -A 'Mozilla/5.0' \
+            'https://misis.ru/files/-/61ebbc4e564f18f7ee346813dd2c4c53/itkn-310826.xls' \
+            -o /tmp/itkn-310826.xls
+          file /tmp/itkn-310826.xls
+          ls -l /tmp/itkn-310826.xls
+          python - <<'PY'
+          import xlrd, json, re
+          p='/tmp/itkn-310826.xls'
+          wb=xlrd.open_workbook(p, formatting_info=False)
+          print('SHEETS', wb.sheet_names())
+          target='ББИ-26-6-2'
+          for s in wb.sheets():
+              hits=[]
+              for r in range(s.nrows):
+                  for c in range(s.ncols):
+                      v=s.cell_value(r,c)
+                      if isinstance(v,str) and target in v:
+                          hits.append((r,c,v))
+              if hits:
+                  print('=== SHEET',s.name,'HITS',hits,'===')
+                  for r,c,v in hits:
+                      r0=max(0,r-8); r1=min(s.nrows,r+90)
+                      c0=max(0,c-5); c1=min(s.ncols,c+8)
+                      print('--- CONTEXT',r0,r1,c0,c1,'---')
+                      for rr in range(r0,r1):
+                          vals=[]
+                          for cc in range(c0,c1):
+                              x=s.cell_value(rr,cc)
+                              if x not in ('',None): vals.append(f'C{cc}={x!r}')
+                          if vals: print(f'R{rr}: '+' | '.join(vals))
+          PY
